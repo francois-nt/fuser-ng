@@ -285,7 +285,7 @@ pub trait FilesystemMT {
     /// * `offset`: offset into the file to start reading.
     /// * `size`: number of bytes to read.
     /// * `callback`: a callback that must be invoked to return the result of the operation: either
-    ///    the result data as a slice, or an error code.
+    ///   the result data as a slice, or an error code.
     ///
     /// Return the return value from the `callback` function.
     fn read(&self, _req: RequestInfo, _path: &Path, _fh: u64, _offset: u64, _size: u32, callback: impl FnOnce(ResultSlice<'_>) -> CallbackResult) -> CallbackResult {
