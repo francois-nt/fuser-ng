@@ -160,11 +160,12 @@ impl<T: FilesystemMT + Sync + Send + 'static> fuser::Filesystem for FuseMT<T> {
         &mut self,
         req: &fuser::Request<'_>,
         ino: u64,
+        fh: Option<u64>,
         reply: fuser::ReplyAttr,
     ) {
         let path = get_path!(self, ino, reply);
         debug!("getattr: {:?}", path);
-        match self.target.getattr(req.info(), &path, None) {
+        match self.target.getattr(req.info(), &path, fh) {
             Ok((ttl, attr)) => {
                 reply.attr(&ttl, &fuse_fileattr(attr, ino))
             },
