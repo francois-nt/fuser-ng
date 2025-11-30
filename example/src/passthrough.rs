@@ -227,7 +227,7 @@ impl FilesystemMT for PassthroughFS {
 
         let real = self.real_path(path);
         match libc_wrappers::open(real, flags as libc::c_int) {
-            Ok(fh) => Ok((fh, flags)),
+            Ok(fh) => Ok((fh, 0)),
             Err(e) => {
                 error!("open({:?}): {}", path, io::Error::from_raw_os_error(e));
                 Err(e)
@@ -608,7 +608,7 @@ impl FilesystemMT for PassthroughFS {
                     ttl: TTL,
                     attr: stat_to_fuse(attr),
                     fh: fd as u64,
-                    flags,
+                    flags: 0,
                 }),
                 Err(e) => {
                     error!("lstat after create({:?}): {}", real, io::Error::from_raw_os_error(e));
