@@ -331,7 +331,10 @@ impl<T: FilesystemMT + Sync + Send + 'static> fuser::Filesystem for FuseMT<T> {
         let parent_path = get_path!(self, parent, reply);
         debug!("rmdir: {:?}/{:?}", parent_path, name);
         match self.target.rmdir(req.info(), &parent_path, name) {
-            Ok(()) => reply.ok(),
+            Ok(()) => {
+                self.inodes.unlink(&parent_path.join(name));
+                reply.ok()
+            },
             Err(e) => reply.error(e),
         }
     }
