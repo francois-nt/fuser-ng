@@ -1,3 +1,9 @@
+v0.6.3: 2025-11-30
+  * Fixed a missing inodes.unlink in rmdir, which could cause a panic in rare circumstances
+
+v0.6.2: 2025-09-22
+  * Updated `fuser` dependency to v0.16.
+
 v0.6.1: 2023-09-19
   * Updated `fuser` dependency to v0.13.
 
