@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use crate::inode_table::{Generation, Inode, LookupCount};
+use crate::inode_table::{Generation, Inode, InodeTable, LookupCount};
 
 /// Info about a request.
 #[derive(Clone, Copy, Debug)]
@@ -202,6 +202,12 @@ impl<'a> EntryName<'a> {
 #[derive(Debug)]
 pub struct FolderPath(Arc<PathBuf>);
 
+impl From<Arc<PathBuf>> for FolderPath {
+    fn from(value: Arc<PathBuf>) -> Self {
+        Self(value)
+    }
+}
+
 impl From<&OsStr> for FolderPath {
     fn from(value: &OsStr) -> Self {
         Self(Arc::new(value.into()))
@@ -229,12 +235,18 @@ pub trait InodeToPath: std::fmt::Debug {
     fn get_folder_path(&self, inode: Inode) -> Option<FolderPath>;
     fn get_parent_inode(&self, ino: Inode) -> Option<Inode>;
     fn lookup(&mut self, inode: Inode);
-    fn rename(&mut self, oldparent: Inode, oldname: &OsStr, newparent: Inode, newname: &OsStr);
+    fn rename(
+        &mut self,
+        oldparent: Inode,
+        oldname: &OsStr,
+        newparent: Inode,
+        newname: &OsStr,
+    ) -> Option<()>;
     fn unlink(&mut self, parent: Inode, name: &OsStr);
 }
 
 pub fn new_table() -> Box<dyn InodeToPath> {
-    todo!()
+    Box::from(InodeTable::new())
 }
 
 /// This trait must be implemented to implement a filesystem with FuseMT.
