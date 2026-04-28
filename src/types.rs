@@ -4,8 +4,12 @@
 //
 
 use std::ffi::{OsStr, OsString};
-use std::path::Path;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+
+use crate::inode_table::{Generation, Inode, LookupCount};
 
 /// Info about a request.
 #[derive(Clone, Copy, Debug)]
@@ -130,6 +134,109 @@ pub struct CallbackResult {
     pub(crate) _private: std::marker::PhantomData<()>,
 }
 
+#[derive(Debug)]
+pub struct ResolvedPath<'a> {
+    parent: Arc<PathBuf>,
+    name: &'a OsStr,
+    ino: Inode,
+}
+
+impl<'a> ResolvedPath<'a> {
+    pub fn new(parent: Arc<PathBuf>, name: &'a OsStr, ino: Inode) -> Self {
+        Self { parent, name, ino }
+    }
+    pub fn full_path(&self) -> PathBuf {
+        self.parent.join(self.name)
+    }
+    pub fn name(&self) -> &OsStr {
+        self.name
+    }
+    pub fn ino(&self) -> Inode {
+        self.ino
+    }
+    pub fn parent_path(&self) -> Arc<PathBuf> {
+        self.parent.clone()
+    }
+    pub fn entry_name(&self) -> EntryName<'a> {
+        EntryName {
+            parent: self.parent.clone(),
+            name: self.name,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct EntryName<'a> {
+    parent: Arc<PathBuf>,
+    //parent_ino: Inode,
+    name: &'a OsStr,
+}
+
+impl<'a> EntryName<'a> {
+    pub fn with(self, ino: Inode) -> ResolvedPath<'a> {
+        ResolvedPath {
+            parent: self.parent,
+            name: self.name,
+            ino,
+        }
+    }
+    pub fn new(parent: FolderPath, name: &'a OsStr) -> Self {
+        Self {
+            parent: parent.0,
+            name,
+        }
+    }
+    pub fn full_path(&self) -> PathBuf {
+        self.parent.join(self.name)
+    }
+    pub fn name(&self) -> &OsStr {
+        self.name
+    }
+
+    pub fn parent_path(&self) -> Arc<PathBuf> {
+        self.parent.clone()
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug)]
+pub struct FolderPath(Arc<PathBuf>);
+
+impl From<&OsStr> for FolderPath {
+    fn from(value: &OsStr) -> Self {
+        Self(Arc::new(value.into()))
+    }
+}
+
+impl Deref for FolderPath {
+    type Target = Arc<PathBuf>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+pub trait InodeToPath: std::fmt::Debug {
+    fn add_leaf(&mut self, parent: Inode, name: &OsStr) -> (Inode, Generation);
+    fn add_dir(&mut self, parent: Inode, name: &OsStr) -> (Inode, Generation);
+    fn add_or_get_leaf(&mut self, parent: Inode, name: &OsStr) -> (Inode, Generation);
+    fn add_or_get_dir(&mut self, parent: Inode, name: &OsStr) -> (Inode, Generation);
+    fn forget(&mut self, inode: Inode, n: LookupCount) -> LookupCount;
+    fn get_path(&self, inode: Inode) -> Option<EntryName<'_>>;
+    fn resolve_from_parent<'a>(&'a self, parent: Inode, name: &'a OsStr) -> Option<EntryName<'a>> {
+        let parent = self.get_folder_path(parent)?;
+        Some(EntryName::new(parent, name))
+    }
+    fn get_folder_path(&self, inode: Inode) -> Option<FolderPath>;
+    fn get_parent_inode(&self, ino: Inode) -> Option<Inode>;
+    fn lookup(&mut self, inode: Inode);
+    fn rename(&mut self, oldparent: Inode, oldname: &OsStr, newparent: Inode, newname: &OsStr);
+    fn unlink(&mut self, parent: Inode, name: &OsStr);
+}
+
+pub fn new_table() -> Box<dyn InodeToPath> {
+    todo!()
+}
+
 /// This trait must be implemented to implement a filesystem with FuseMT.
 pub trait FilesystemMT {
     /// Called on mount, before any other function.
@@ -145,7 +252,7 @@ pub trait FilesystemMT {
     /// Get the attributes of a filesystem entry.
     ///
     /// * `fh`: a file handle if this is called on an open file.
-    fn getattr(&self, _req: RequestInfo, _path: &Path, _fh: Option<u64>) -> ResultEntry {
+    fn getattr(&self, _req: RequestInfo, _path: &EntryName<'_>, _fh: Option<u64>) -> ResultEntry {
         Err(libc::ENOSYS)
     }
 
@@ -156,7 +263,13 @@ pub trait FilesystemMT {
     ///
     /// * `fh`: a file handle if this is called on an open file.
     /// * `mode`: the mode to change the file to.
-    fn chmod(&self, _req: RequestInfo, _path: &Path, _fh: Option<u64>, _mode: u32) -> ResultEmpty {
+    fn chmod(
+        &self,
+        _req: RequestInfo,
+        _path: &ResolvedPath<'_>,
+        _fh: Option<u64>,
+        _mode: u32,
+    ) -> ResultEmpty {
         Err(libc::ENOSYS)
     }
 
@@ -165,7 +278,14 @@ pub trait FilesystemMT {
     /// * `fh`: a file handle if this is called on an open file.
     /// * `uid`: user ID to change the file's owner to. If `None`, leave the UID unchanged.
     /// * `gid`: group ID to change the file's group to. If `None`, leave the GID unchanged.
-    fn chown(&self, _req: RequestInfo, _path: &Path, _fh: Option<u64>, _uid: Option<u32>, _gid: Option<u32>) -> ResultEmpty {
+    fn chown(
+        &self,
+        _req: RequestInfo,
+        _path: &ResolvedPath<'_>,
+        _fh: Option<u64>,
+        _uid: Option<u32>,
+        _gid: Option<u32>,
+    ) -> ResultEmpty {
         Err(libc::ENOSYS)
     }
 
@@ -173,7 +293,13 @@ pub trait FilesystemMT {
     ///
     /// * `fh`: a file handle if this is called on an open file.
     /// * `size`: size in bytes to set as the file's length.
-    fn truncate(&self, _req: RequestInfo, _path: &Path, _fh: Option<u64>, _size: u64) -> ResultEmpty {
+    fn truncate(
+        &self,
+        _req: RequestInfo,
+        _path: &ResolvedPath<'_>,
+        _fh: Option<u64>,
+        _size: u64,
+    ) -> ResultEmpty {
         Err(libc::ENOSYS)
     }
 
@@ -182,20 +308,36 @@ pub trait FilesystemMT {
     /// * `fh`: a file handle if this is called on an open file.
     /// * `atime`: the time of last access.
     /// * `mtime`: the time of last modification.
-    fn utimens(&self, _req: RequestInfo, _path: &Path, _fh: Option<u64>, _atime: Option<SystemTime>, _mtime: Option<SystemTime>) -> ResultEmpty {
+    fn utimens(
+        &self,
+        _req: RequestInfo,
+        _path: &ResolvedPath<'_>,
+        _fh: Option<u64>,
+        _atime: Option<SystemTime>,
+        _mtime: Option<SystemTime>,
+    ) -> ResultEmpty {
         Err(libc::ENOSYS)
     }
 
     /// Set timestamps of a filesystem entry (with extra options only used on MacOS).
     #[allow(clippy::too_many_arguments)]
-    fn utimens_macos(&self, _req: RequestInfo, _path: &Path, _fh: Option<u64>, _crtime: Option<SystemTime>, _chgtime: Option<SystemTime>, _bkuptime: Option<SystemTime>, _flags: Option<u32>) -> ResultEmpty {
+    fn utimens_macos(
+        &self,
+        _req: RequestInfo,
+        _path: &ResolvedPath<'_>,
+        _fh: Option<u64>,
+        _crtime: Option<SystemTime>,
+        _chgtime: Option<SystemTime>,
+        _bkuptime: Option<SystemTime>,
+        _flags: Option<u32>,
+    ) -> ResultEmpty {
         Err(libc::ENOSYS)
     }
 
     // END OF SETATTR FUNCTIONS
 
     /// Read a symbolic link.
-    fn readlink(&self, _req: RequestInfo, _path: &Path) -> ResultData {
+    fn readlink(&self, _req: RequestInfo, _path: &ResolvedPath<'_>) -> ResultData {
         Err(libc::ENOSYS)
     }
 
@@ -205,7 +347,13 @@ pub trait FilesystemMT {
     /// * `name`: name of the entry.
     /// * `mode`: mode for the new entry.
     /// * `rdev`: if mode has the bits `S_IFCHR` or `S_IFBLK` set, this is the major and minor numbers for the device file. Otherwise it should be ignored.
-    fn mknod(&self, _req: RequestInfo, _parent: &Path, _name: &OsStr, _mode: u32, _rdev: u32) -> ResultEntry {
+    fn mknod(
+        &self,
+        _req: RequestInfo,
+        _entry: &EntryName<'_>,
+        _mode: u32,
+        _rdev: u32,
+    ) -> ResultEntry {
         Err(libc::ENOSYS)
     }
 
@@ -214,7 +362,7 @@ pub trait FilesystemMT {
     /// * `parent`: path to the directory to make the directory under.
     /// * `name`: name of the directory.
     /// * `mode`: permissions for the new directory.
-    fn mkdir(&self, _req: RequestInfo, _parent: &Path, _name: &OsStr, _mode: u32) -> ResultEntry {
+    fn mkdir(&self, _req: RequestInfo, _entry: &EntryName<'_>, _mode: u32) -> ResultEntry {
         Err(libc::ENOSYS)
     }
 
@@ -222,7 +370,7 @@ pub trait FilesystemMT {
     ///
     /// * `parent`: path to the directory containing the file to delete.
     /// * `name`: name of the file to delete.
-    fn unlink(&self, _req: RequestInfo, _parent: &Path, _name: &OsStr) -> ResultEmpty {
+    fn unlink(&self, _req: RequestInfo, _entry: &EntryName<'_>) -> ResultEmpty {
         Err(libc::ENOSYS)
     }
 
@@ -230,7 +378,7 @@ pub trait FilesystemMT {
     ///
     /// * `parent`: path to the directory containing the directory to delete.
     /// * `name`: name of the directory to delete.
-    fn rmdir(&self, _req: RequestInfo, _parent: &Path, _name: &OsStr) -> ResultEmpty {
+    fn rmdir(&self, _req: RequestInfo, _entry: &EntryName<'_>) -> ResultEmpty {
         Err(libc::ENOSYS)
     }
 
@@ -239,7 +387,7 @@ pub trait FilesystemMT {
     /// * `parent`: path to the directory to make the link in.
     /// * `name`: name of the symbolic link.
     /// * `target`: path (may be relative or absolute) to the target of the link.
-    fn symlink(&self, _req: RequestInfo, _parent: &Path, _name: &OsStr, _target: &Path) -> ResultEntry {
+    fn symlink(&self, _req: RequestInfo, _entry: &EntryName<'_>, _target: &Path) -> ResultEntry {
         Err(libc::ENOSYS)
     }
 
@@ -249,7 +397,12 @@ pub trait FilesystemMT {
     /// * `name`: name of the existing entry.
     /// * `newparent`: path to the directory it should be renamed into (may be the same as `parent`).
     /// * `newname`: name of the new entry.
-    fn rename(&self, _req: RequestInfo, _parent: &Path, _name: &OsStr, _newparent: &Path, _newname: &OsStr) -> ResultEmpty {
+    fn rename(
+        &self,
+        _req: RequestInfo,
+        _entry: &EntryName<'_>,
+        _new_entry: &EntryName<'_>,
+    ) -> ResultEmpty {
         Err(libc::ENOSYS)
     }
 
@@ -258,7 +411,12 @@ pub trait FilesystemMT {
     /// * `path`: path to an existing file.
     /// * `newparent`: path to the directory for the new link.
     /// * `newname`: name for the new link.
-    fn link(&self, _req: RequestInfo, _path: &Path, _newparent: &Path, _newname: &OsStr) -> ResultEntry {
+    fn link(
+        &self,
+        _req: RequestInfo,
+        _path: &ResolvedPath<'_>,
+        _new_entry: &EntryName<'_>,
+    ) -> ResultEntry {
         Err(libc::ENOSYS)
     }
 
@@ -270,7 +428,7 @@ pub trait FilesystemMT {
     /// Return a tuple of (file handle, flags). The file handle will be passed to any subsequent
     /// calls that operate on the file, and can be any value you choose, though it should allow
     /// your filesystem to identify the file opened even without any path info.
-    fn open(&self, _req: RequestInfo, _path: &Path, _flags: u32) -> ResultOpen {
+    fn open(&self, _req: RequestInfo, _path: &ResolvedPath<'_>, _flags: u32) -> ResultOpen {
         Err(libc::ENOSYS)
     }
 
@@ -288,7 +446,15 @@ pub trait FilesystemMT {
     ///   the result data as a slice, or an error code.
     ///
     /// Return the return value from the `callback` function.
-    fn read(&self, _req: RequestInfo, _path: &Path, _fh: u64, _offset: u64, _size: u32, callback: impl FnOnce(ResultSlice<'_>) -> CallbackResult) -> CallbackResult {
+    fn read(
+        &self,
+        _req: RequestInfo,
+        _path: &ResolvedPath<'_>,
+        _fh: u64,
+        _offset: u64,
+        _size: u32,
+        callback: impl FnOnce(ResultSlice<'_>) -> CallbackResult,
+    ) -> CallbackResult {
         callback(Err(libc::ENOSYS))
     }
 
@@ -301,7 +467,15 @@ pub trait FilesystemMT {
     /// * `flags`:
     ///
     /// Return the number of bytes written.
-    fn write(&self, _req: RequestInfo, _path: &Path, _fh: u64, _offset: u64, _data: Vec<u8>, _flags: u32) -> ResultWrite {
+    fn write(
+        &self,
+        _req: RequestInfo,
+        _path: &ResolvedPath<'_>,
+        _fh: u64,
+        _offset: u64,
+        _data: Vec<u8>,
+        _flags: u32,
+    ) -> ResultWrite {
         Err(libc::ENOSYS)
     }
 
@@ -316,7 +490,13 @@ pub trait FilesystemMT {
     /// * `fh`: file handle returned from the `open` call.
     /// * `lock_owner`: if the filesystem supports locking (`setlk`, `getlk`), remove all locks
     ///   belonging to this lock owner.
-    fn flush(&self, _req: RequestInfo, _path: &Path, _fh: u64, _lock_owner: u64) -> ResultEmpty {
+    fn flush(
+        &self,
+        _req: RequestInfo,
+        _path: &ResolvedPath<'_>,
+        _fh: u64,
+        _lock_owner: u64,
+    ) -> ResultEmpty {
         Err(libc::ENOSYS)
     }
 
@@ -331,7 +511,15 @@ pub trait FilesystemMT {
     /// * `lock_owner`: if the filesystem supports locking (`setlk`, `getlk`), remove all locks
     ///   belonging to this lock owner.
     /// * `flush`: whether pending data must be flushed or not.
-    fn release(&self, _req: RequestInfo, _path: &Path, _fh: u64, _flags: u32, _lock_owner: u64, _flush: bool) -> ResultEmpty {
+    fn release(
+        &self,
+        _req: RequestInfo,
+        _path: &ResolvedPath<'_>,
+        _fh: u64,
+        _flags: u32,
+        _lock_owner: u64,
+        _flush: bool,
+    ) -> ResultEmpty {
         Err(libc::ENOSYS)
     }
 
@@ -342,7 +530,13 @@ pub trait FilesystemMT {
     /// * `path`: path to the file.
     /// * `fh`: file handle returned from the `open` call.
     /// * `datasync`: if `false`, also write metadata, otherwise just write file data.
-    fn fsync(&self, _req: RequestInfo, _path: &Path, _fh: u64, _datasync: bool) -> ResultEmpty {
+    fn fsync(
+        &self,
+        _req: RequestInfo,
+        _path: &ResolvedPath<'_>,
+        _fh: u64,
+        _datasync: bool,
+    ) -> ResultEmpty {
         Err(libc::ENOSYS)
     }
 
@@ -356,7 +550,7 @@ pub trait FilesystemMT {
     /// Return a tuple of (file handle, flags). The file handle will be passed to any subsequent
     /// calls that operate on the directory, and can be any value you choose, though it should
     /// allow your filesystem to identify the directory opened even without any path info.
-    fn opendir(&self, _req: RequestInfo, _path: &Path, _flags: u32) -> ResultOpen {
+    fn opendir(&self, _req: RequestInfo, _path: &ResolvedPath<'_>, _flags: u32) -> ResultOpen {
         Err(libc::ENOSYS)
     }
 
@@ -366,7 +560,7 @@ pub trait FilesystemMT {
     /// * `fh`: file handle returned from the `opendir` call.
     ///
     /// Return all the entries of the directory.
-    fn readdir(&self, _req: RequestInfo, _path: &Path, _fh: u64) -> ResultReaddir {
+    fn readdir(&self, _req: RequestInfo, _path: &ResolvedPath<'_>, _fh: u64) -> ResultReaddir {
         Err(libc::ENOSYS)
     }
 
@@ -377,14 +571,26 @@ pub trait FilesystemMT {
     /// * `path`: path to the directory.
     /// * `fh`: file handle returned from the `opendir` call.
     /// * `flags`: the file access flags passed to the `opendir` call.
-    fn releasedir(&self, _req: RequestInfo, _path: &Path, _fh: u64, _flags: u32) -> ResultEmpty {
+    fn releasedir(
+        &self,
+        _req: RequestInfo,
+        _path: &ResolvedPath<'_>,
+        _fh: u64,
+        _flags: u32,
+    ) -> ResultEmpty {
         Err(libc::ENOSYS)
     }
 
     /// Write out any pending changes to a directory.
     ///
     /// Analogous to the `fsync` call.
-    fn fsyncdir(&self, _req: RequestInfo, _path: &Path, _fh: u64, _datasync: bool) -> ResultEmpty {
+    fn fsyncdir(
+        &self,
+        _req: RequestInfo,
+        _path: &ResolvedPath<'_>,
+        _fh: u64,
+        _datasync: bool,
+    ) -> ResultEmpty {
         Err(libc::ENOSYS)
     }
 
@@ -393,7 +599,7 @@ pub trait FilesystemMT {
     /// * `path`: path to some folder in the filesystem.
     ///
     /// See the `Statfs` struct for more details.
-    fn statfs(&self, _req: RequestInfo, _path: &Path) -> ResultStatfs {
+    fn statfs(&self, _req: RequestInfo, _path: &ResolvedPath<'_>) -> ResultStatfs {
         Err(libc::ENOSYS)
     }
 
@@ -404,7 +610,15 @@ pub trait FilesystemMT {
     /// * `value`: the data to set the value to.
     /// * `flags`: can be either `XATTR_CREATE` or `XATTR_REPLACE`.
     /// * `position`: offset into the attribute value to write data.
-    fn setxattr(&self, _req: RequestInfo, _path: &Path, _name: &OsStr, _value: &[u8], _flags: u32, _position: u32) -> ResultEmpty {
+    fn setxattr(
+        &self,
+        _req: RequestInfo,
+        _path: &ResolvedPath<'_>,
+        _name: &OsStr,
+        _value: &[u8],
+        _flags: u32,
+        _position: u32,
+    ) -> ResultEmpty {
         Err(libc::ENOSYS)
     }
 
@@ -416,7 +630,13 @@ pub trait FilesystemMT {
     ///
     /// If `size` is 0, return `Xattr::Size(n)` where `n` is the size of the attribute data.
     /// Otherwise, return `Xattr::Data(data)` with the requested data.
-    fn getxattr(&self, _req: RequestInfo, _path: &Path, _name: &OsStr, _size: u32) -> ResultXattr {
+    fn getxattr(
+        &self,
+        _req: RequestInfo,
+        _path: &ResolvedPath<'_>,
+        _name: &OsStr,
+        _size: u32,
+    ) -> ResultXattr {
         Err(libc::ENOSYS)
     }
 
@@ -429,7 +649,7 @@ pub trait FilesystemMT {
     /// attribute names.
     /// Otherwise, return `Xattr::Data(data)` where `data` is all the null-terminated attribute
     /// names.
-    fn listxattr(&self, _req: RequestInfo, _path: &Path, _size: u32) -> ResultXattr {
+    fn listxattr(&self, _req: RequestInfo, _path: &ResolvedPath<'_>, _size: u32) -> ResultXattr {
         Err(libc::ENOSYS)
     }
 
@@ -437,7 +657,12 @@ pub trait FilesystemMT {
     ///
     /// * `path`: path to the file.
     /// * `name`: name of the attribute to remove.
-    fn removexattr(&self, _req: RequestInfo, _path: &Path, _name: &OsStr) -> ResultEmpty {
+    fn removexattr(
+        &self,
+        _req: RequestInfo,
+        _path: &ResolvedPath<'_>,
+        _name: &OsStr,
+    ) -> ResultEmpty {
         Err(libc::ENOSYS)
     }
 
@@ -448,7 +673,7 @@ pub trait FilesystemMT {
     ///
     /// Return `Ok(())` if all requested permissions are allowed, otherwise return `Err(EACCES)`
     /// or other error code as appropriate (e.g. `ENOENT` if the file doesn't exist).
-    fn access(&self, _req: RequestInfo, _path: &Path, _mask: u32) -> ResultEmpty {
+    fn access(&self, _req: RequestInfo, _path: &ResolvedPath<'_>, _mask: u32) -> ResultEmpty {
         Err(libc::ENOSYS)
     }
 
@@ -461,7 +686,13 @@ pub trait FilesystemMT {
     ///
     /// Return a `CreatedEntry` (which contains the new file's attributes as well as a file handle
     /// -- see documentation on `open` for more info on that).
-    fn create(&self, _req: RequestInfo, _parent: &Path, _name: &OsStr, _mode: u32, _flags: u32) -> ResultCreate {
+    fn create(
+        &self,
+        _req: RequestInfo,
+        _entry: &EntryName<'_>,
+        _mode: u32,
+        _flags: u32,
+    ) -> ResultCreate {
         Err(libc::ENOSYS)
     }
 
@@ -487,7 +718,7 @@ pub trait FilesystemMT {
     ///
     /// Return an `XTimes` struct with the times, or other error code as appropriate.
     #[cfg(target_os = "macos")]
-    fn getxtimes(&self, _req: RequestInfo, _path: &Path) -> ResultXTimes {
+    fn getxtimes(&self, _req: RequestInfo, _path: &ResolvedPath<'_>) -> ResultXTimes {
         Err(libc::ENOSYS)
     }
 }
