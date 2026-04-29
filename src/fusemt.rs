@@ -14,6 +14,7 @@ use threadpool::ThreadPool;
 
 use crate::FileType;
 use crate::directory_cache::*;
+use crate::inode_table::{InodeTable, InodeToPath};
 use crate::types::*;
 
 trait IntoRequestInfo {
@@ -67,7 +68,7 @@ impl TimeOrNowExt for TimeOrNow {
 #[derive(Debug)]
 pub struct FuseMT<T> {
     target: Arc<T>,
-    table: Box<dyn InodeToPath>,
+    table: InodeTable,
     threads: Option<ThreadPool>,
     num_threads: usize,
     directory_cache: DirectoryCache,
@@ -77,7 +78,7 @@ impl<T: FilesystemMT + Sync + Send + 'static> FuseMT<T> {
     pub fn new(target_fs: T, num_threads: usize) -> FuseMT<T> {
         FuseMT {
             target: Arc::new(target_fs),
-            table: new_table(),
+            table: InodeTable::new(),
             threads: None,
             num_threads,
             directory_cache: DirectoryCache::new(),

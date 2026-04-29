@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use crate::inode_table::{Generation, Inode, InodeTable, LookupCount};
+pub type Inode = u64;
 
 /// Info about a request.
 #[derive(Clone, Copy, Debug)]
@@ -221,34 +221,6 @@ impl Deref for FolderPath {
     fn deref(&self) -> &Self::Target {
         &self.0
     }
-}
-
-pub trait InodeToPath: std::fmt::Debug {
-    fn add_leaf(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
-    fn add_dir(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
-    fn add_or_get_leaf(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
-    fn add_or_get_dir(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
-    fn forget(&mut self, inode: Inode, n: LookupCount) -> LookupCount;
-    fn get_path(&self, inode: Inode) -> Option<EntryName<'_>>;
-    fn resolve_from_parent<'a>(&'a self, parent: Inode, name: &'a OsStr) -> Option<EntryName<'a>> {
-        let parent = self.get_folder_path(parent)?;
-        Some(EntryName::new(parent, name))
-    }
-    fn get_folder_path(&self, inode: Inode) -> Option<FolderPath>;
-    fn get_parent_inode(&self, ino: Inode) -> Option<Inode>;
-    fn lookup(&mut self, inode: Inode);
-    fn rename(
-        &mut self,
-        oldparent: Inode,
-        oldname: &OsStr,
-        newparent: Inode,
-        newname: &OsStr,
-    ) -> Option<()>;
-    fn unlink(&mut self, parent: Inode, name: &OsStr);
-}
-
-pub fn new_table() -> Box<dyn InodeToPath> {
-    Box::from(InodeTable::new())
 }
 
 /// This trait must be implemented to implement a filesystem with FuseMT.

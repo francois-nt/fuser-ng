@@ -8,11 +8,34 @@ use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::{EntryName, FolderPath, InodeToPath};
+use crate::{EntryName, FolderPath, Inode};
 
-pub type Inode = u64;
 pub type Generation = u64;
 pub type LookupCount = u64;
+
+pub trait InodeToPath: std::fmt::Debug {
+    fn add_leaf(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
+    fn add_dir(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
+    fn add_or_get_leaf(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
+    fn add_or_get_dir(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
+    fn forget(&mut self, inode: Inode, n: LookupCount) -> LookupCount;
+    fn get_path(&self, inode: Inode) -> Option<EntryName<'_>>;
+    fn resolve_from_parent<'a>(&'a self, parent: Inode, name: &'a OsStr) -> Option<EntryName<'a>> {
+        let parent = self.get_folder_path(parent)?;
+        Some(EntryName::new(parent, name))
+    }
+    fn get_folder_path(&self, inode: Inode) -> Option<FolderPath>;
+    fn get_parent_inode(&self, ino: Inode) -> Option<Inode>;
+    fn lookup(&mut self, inode: Inode);
+    fn rename(
+        &mut self,
+        oldparent: Inode,
+        oldname: &OsStr,
+        newparent: Inode,
+        newname: &OsStr,
+    ) -> Option<()>;
+    fn unlink(&mut self, parent: Inode, name: &OsStr);
+}
 
 mod child_key {
     use super::Inode;
@@ -609,8 +632,8 @@ impl InodeToPath for InodeTable {
 #[cfg(test)]
 // Tests for the tree-backed table; the historical table stays in old.
 mod tests {
+    use super::InodeToPath;
     use super::{Inode, InodeTable};
-    use crate::InodeToPath;
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
 
