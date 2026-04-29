@@ -26,9 +26,9 @@ mod types;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub use fuser::FileType;
 pub use crate::fusemt::*;
 pub use crate::types::*;
+pub use fuser::FileType;
 
 // Forward to similarly-named fuser functions to work around deprecation for now.
 // When these are removed, we'll have to either reimplement or break reverse compat.

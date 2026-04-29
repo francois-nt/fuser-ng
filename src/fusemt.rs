@@ -12,9 +12,9 @@ use std::time::SystemTime;
 use fuser::TimeOrNow;
 use threadpool::ThreadPool;
 
+use crate::FileType;
 use crate::directory_cache::*;
 use crate::types::*;
-use crate::FileType;
 
 trait IntoRequestInfo {
     fn info(&self) -> RequestInfo;
@@ -46,7 +46,7 @@ fn fuse_fileattr(attr: FileAttr, ino: u64) -> fuser::FileAttr {
         uid: attr.uid,
         gid: attr.gid,
         rdev: attr.rdev,
-        blksize: 4096, // TODO
+        blksize: attr.blksize,
         flags: attr.flags,
     }
 }
@@ -124,9 +124,7 @@ macro_rules! resolve_from_parent {
 }
 
 macro_rules! get_resolved_path {
-    ($s:expr, $ino:expr, $reply:expr) => {{
-        get_entry_name!($s, $ino, $reply).with($ino)
-    }};
+    ($s:expr, $ino:expr, $reply:expr) => {{ get_entry_name!($s, $ino, $reply).with($ino) }};
 }
 
 impl<T: FilesystemMT + Sync + Send + 'static> fuser::Filesystem for FuseMT<T> {
@@ -158,13 +156,17 @@ impl<T: FilesystemMT + Sync + Send + 'static> fuser::Filesystem for FuseMT<T> {
         //let path = Arc::new((*parent_path).clone().join(name));
         match self.target.getattr(req.info(), &path, None) {
             Ok((ttl, attr)) => {
-                let (ino, generation) = if attr.kind == FileType::Directory {
+                let value = if attr.kind == FileType::Directory {
                     self.table.add_or_get_dir(parent, name)
                 } else {
                     self.table.add_or_get_leaf(parent, name)
                 };
-                self.table.lookup(ino);
-                reply.entry(&ttl, &fuse_fileattr(attr, ino), generation);
+                if let Some((ino, generation)) = value {
+                    self.table.lookup(ino);
+                    reply.entry(&ttl, &fuse_fileattr(attr, ino), generation);
+                } else {
+                    reply.error(libc::EINVAL)
+                }
             }
             Err(e) => reply.error(e),
         }
@@ -229,25 +231,25 @@ impl<T: FilesystemMT + Sync + Send + 'static> fuser::Filesystem for FuseMT<T> {
 
         // TODO: figure out what C FUSE does when only some of these are implemented.
 
-        if let Some(mode) = mode {
-            if let Err(e) = self.target.chmod(req.info(), &path, fh, mode) {
-                reply.error(e);
-                return;
-            }
+        if let Some(mode) = mode
+            && let Err(e) = self.target.chmod(req.info(), &path, fh, mode)
+        {
+            reply.error(e);
+            return;
         }
 
-        if uid.is_some() || gid.is_some() {
-            if let Err(e) = self.target.chown(req.info(), &path, fh, uid, gid) {
-                reply.error(e);
-                return;
-            }
+        if (uid.is_some() || gid.is_some())
+            && let Err(e) = self.target.chown(req.info(), &path, fh, uid, gid)
+        {
+            reply.error(e);
+            return;
         }
 
-        if let Some(size) = size {
-            if let Err(e) = self.target.truncate(req.info(), &path, fh, size) {
-                reply.error(e);
-                return;
-            }
+        if let Some(size) = size
+            && let Err(e) = self.target.truncate(req.info(), &path, fh, size)
+        {
+            reply.error(e);
+            return;
         }
 
         if atime.is_some() || mtime.is_some() {
@@ -259,14 +261,13 @@ impl<T: FilesystemMT + Sync + Send + 'static> fuser::Filesystem for FuseMT<T> {
             }
         }
 
-        if crtime.is_some() || chgtime.is_some() || bkuptime.is_some() || flags.is_some() {
-            if let Err(e) =
+        if (crtime.is_some() || chgtime.is_some() || bkuptime.is_some() || flags.is_some())
+            && let Err(e) =
                 self.target
                     .utimens_macos(req.info(), &path, fh, crtime, chgtime, bkuptime, flags)
-            {
-                reply.error(e);
-                return;
-            }
+        {
+            reply.error(e);
+            return;
         }
 
         match self.target.getattr(req.info(), &path.entry_name(), fh) {
@@ -298,8 +299,11 @@ impl<T: FilesystemMT + Sync + Send + 'static> fuser::Filesystem for FuseMT<T> {
         debug!("mknod: {:?}", entry);
         match self.target.mknod(req.info(), &entry, mode, rdev) {
             Ok((ttl, attr)) => {
-                let (ino, generation) = self.table.add_leaf(parent, name);
-                reply.entry(&ttl, &fuse_fileattr(attr, ino), generation)
+                if let Some((ino, generation)) = self.table.add_leaf(parent, name) {
+                    reply.entry(&ttl, &fuse_fileattr(attr, ino), generation)
+                } else {
+                    reply.error(libc::EINVAL)
+                }
             }
             Err(e) => reply.error(e),
         }
@@ -318,8 +322,11 @@ impl<T: FilesystemMT + Sync + Send + 'static> fuser::Filesystem for FuseMT<T> {
         debug!("mkdir: {:?} (mode={:#o})", entry, mode);
         match self.target.mkdir(req.info(), &entry, mode) {
             Ok((ttl, attr)) => {
-                let (ino, generation) = self.table.add_dir(parent, name);
-                reply.entry(&ttl, &fuse_fileattr(attr, ino), generation)
+                if let Some((ino, generation)) = self.table.add_dir(parent, name) {
+                    reply.entry(&ttl, &fuse_fileattr(attr, ino), generation)
+                } else {
+                    reply.error(libc::EINVAL)
+                }
             }
             Err(e) => reply.error(e),
         }
@@ -373,8 +380,11 @@ impl<T: FilesystemMT + Sync + Send + 'static> fuser::Filesystem for FuseMT<T> {
         debug!("symlink: {:?} -> {:?}", entry, link);
         match self.target.symlink(req.info(), &entry, link) {
             Ok((ttl, attr)) => {
-                let (ino, generation) = self.table.add_leaf(parent, name);
-                reply.entry(&ttl, &fuse_fileattr(attr, ino), generation)
+                if let Some((ino, generation)) = self.table.add_leaf(parent, name) {
+                    reply.entry(&ttl, &fuse_fileattr(attr, ino), generation)
+                } else {
+                    reply.error(libc::EINVAL)
+                }
             }
             Err(e) => reply.error(e),
         }
@@ -417,8 +427,11 @@ impl<T: FilesystemMT + Sync + Send + 'static> fuser::Filesystem for FuseMT<T> {
             Ok((ttl, attr)) => {
                 // NOTE: this results in the new link having a different inode from the original.
                 // This is needed because our inode table is a 1:1 map between paths and inodes.
-                let (new_ino, generation) = self.table.add_leaf(newparent, newname);
-                reply.entry(&ttl, &fuse_fileattr(attr, new_ino), generation);
+                if let Some((new_ino, generation)) = self.table.add_leaf(newparent, newname) {
+                    reply.entry(&ttl, &fuse_fileattr(attr, new_ino), generation);
+                } else {
+                    reply.error(libc::EINVAL);
+                }
             }
             Err(e) => reply.error(e),
         }
@@ -844,9 +857,12 @@ impl<T: FilesystemMT + Sync + Send + 'static> fuser::Filesystem for FuseMT<T> {
         debug!("create: {:?} (mode={:#o}, flags={:#x})", entry, mode, flags);
         match self.target.create(req.info(), &entry, mode, flags as u32) {
             Ok(create) => {
-                let (ino, generation) = self.table.add_leaf(parent, name);
-                let attr = fuse_fileattr(create.attr, ino);
-                reply.created(&create.ttl, &attr, generation, create.fh, create.flags);
+                if let Some((ino, generation)) = self.table.add_leaf(parent, name) {
+                    let attr = fuse_fileattr(create.attr, ino);
+                    reply.created(&create.ttl, &attr, generation, create.fh, create.flags);
+                } else {
+                    reply.error(libc::EINVAL);
+                }
             }
             Err(e) => reply.error(e),
         }
