@@ -47,9 +47,12 @@ impl DirectoryCache {
     /// Get the real file handle (the one set by the filesystem) for a given cache entry key.
     /// Panics if there is no such key.
     pub fn real_fh(&self, key: u64) -> u64 {
-        self.entries.get(&key).unwrap_or_else(|| {
-            panic!("no such directory cache key {}", key);
-        }).fh
+        self.entries
+            .get(&key)
+            .unwrap_or_else(|| {
+                panic!("no such directory cache key {}", key);
+            })
+            .fh
     }
 
     /// Get a mutable reference to the cache entry (file handle and entries) for the given key.
@@ -76,9 +79,6 @@ pub struct DirectoryCacheEntry {
 
 impl DirectoryCacheEntry {
     pub fn new(fh: u64) -> DirectoryCacheEntry {
-        DirectoryCacheEntry {
-            fh,
-            entries: None,
-        }
+        DirectoryCacheEntry { fh, entries: None }
     }
 }

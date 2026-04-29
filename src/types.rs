@@ -81,6 +81,8 @@ pub struct FileAttr {
     pub gid: u32,
     /// Device ID (if special file)
     pub rdev: u32,
+    /// block size
+    pub blksize: u32,
     /// Flags (macOS only; see chflags(2))
     pub flags: u32,
 }
@@ -222,10 +224,10 @@ impl Deref for FolderPath {
 }
 
 pub trait InodeToPath: std::fmt::Debug {
-    fn add_leaf(&mut self, parent: Inode, name: &OsStr) -> (Inode, Generation);
-    fn add_dir(&mut self, parent: Inode, name: &OsStr) -> (Inode, Generation);
-    fn add_or_get_leaf(&mut self, parent: Inode, name: &OsStr) -> (Inode, Generation);
-    fn add_or_get_dir(&mut self, parent: Inode, name: &OsStr) -> (Inode, Generation);
+    fn add_leaf(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
+    fn add_dir(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
+    fn add_or_get_leaf(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
+    fn add_or_get_dir(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
     fn forget(&mut self, inode: Inode, n: LookupCount) -> LookupCount;
     fn get_path(&self, inode: Inode) -> Option<EntryName<'_>>;
     fn resolve_from_parent<'a>(&'a self, parent: Inode, name: &'a OsStr) -> Option<EntryName<'a>> {
