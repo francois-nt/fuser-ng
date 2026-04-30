@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime};
 use crate::libc_extras::libc;
 use crate::libc_wrappers;
 
-use fuse_mt::*;
+use fuse_mt_ng::*;
 
 pub struct PassthroughFS {
     pub target: OsString,
@@ -121,6 +121,26 @@ impl PassthroughFS {
     }
 }
 
+trait ToIoResult<T> {
+    fn io_result(self) -> std::io::Result<T>;
+}
+
+trait ToIoError {
+    fn io_error(self) -> std::io::Error;
+}
+
+impl ToIoError for libc::c_int {
+    fn io_error(self) -> std::io::Error {
+        io::Error::from_raw_os_error(self)
+    }
+}
+
+impl<T> ToIoResult<T> for Result<T, libc::c_int> {
+    fn io_result(self) -> std::io::Result<T> {
+        self.map_err(io::Error::from_raw_os_error)
+    }
+}
+
 const TTL: Duration = Duration::from_secs(1);
 
 impl FilesystemMT for PassthroughFS {
@@ -133,23 +153,23 @@ impl FilesystemMT for PassthroughFS {
         debug!("destroy");
     }
 
-    fn getattr(&self, _req: RequestInfo, path: &EntryName<'_>, fh: Option<u64>) -> ResultEntry {
+    fn getattr(&self, _req: RequestInfo, path: &EntryName, fh: Option<u64>) -> ResultEntry {
         debug!("getattr: {:?}", path);
 
         if let Some(fh) = fh {
             match libc_wrappers::fstat(fh) {
                 Ok(stat) => Ok((TTL, stat_to_fuse(stat))),
-                Err(e) => Err(e),
+                Err(e) => Err(std::io::Error::from_raw_os_error(e)),
             }
         } else {
             match self.stat_real(&path.full_path()) {
                 Ok(attr) => Ok((TTL, attr)),
-                Err(e) => Err(e.raw_os_error().unwrap()),
+                Err(e) => Err(e),
             }
         }
     }
 
-    fn opendir(&self, _req: RequestInfo, path: &ResolvedPath<'_>, _flags: u32) -> ResultOpen {
+    fn opendir(&self, _req: RequestInfo, path: &ResolvedPath, _flags: u32) -> ResultOpen {
         let real = self.real_path(&path.full_path());
         debug!("opendir: {:?} (flags = {:#o})", real, _flags);
         match libc_wrappers::opendir(real) {
@@ -157,7 +177,7 @@ impl FilesystemMT for PassthroughFS {
             Err(e) => {
                 let ioerr = io::Error::from_raw_os_error(e);
                 error!("opendir({:?}): {}", path, ioerr);
-                Err(e)
+                Err(e.io_error())
             }
         }
     }
@@ -165,21 +185,21 @@ impl FilesystemMT for PassthroughFS {
     fn releasedir(
         &self,
         _req: RequestInfo,
-        path: &ResolvedPath<'_>,
+        path: &ResolvedPath,
         fh: u64,
         _flags: u32,
     ) -> ResultEmpty {
         debug!("releasedir: {:?}", path);
-        libc_wrappers::closedir(fh)
+        libc_wrappers::closedir(fh).io_result()
     }
 
-    fn readdir(&self, _req: RequestInfo, path: &ResolvedPath<'_>, fh: u64) -> ResultReaddir {
+    fn readdir(&self, _req: RequestInfo, path: &ResolvedPath, fh: u64) -> ResultReaddir {
         debug!("readdir: {:?}", path);
         let mut entries: Vec<DirectoryEntry> = vec![];
 
         if fh == 0 {
             error!("readdir: missing fh");
-            return Err(libc::EINVAL);
+            return Err(libc::EINVAL.io_error());
         }
         let path = path.full_path();
         loop {
@@ -223,7 +243,7 @@ impl FilesystemMT for PassthroughFS {
                 }
                 Err(e) => {
                     error!("readdir: {:?}: {}", path, e);
-                    return Err(e);
+                    return Err(e.io_error());
                 }
             }
         }
@@ -231,7 +251,7 @@ impl FilesystemMT for PassthroughFS {
         Ok(entries)
     }
 
-    fn open(&self, _req: RequestInfo, path: &ResolvedPath<'_>, flags: u32) -> ResultOpen {
+    fn open(&self, _req: RequestInfo, path: &ResolvedPath, flags: u32) -> ResultOpen {
         debug!("open: {:?} flags={:#x}", path, flags);
 
         let real = self.real_path(&path.full_path());
@@ -239,7 +259,7 @@ impl FilesystemMT for PassthroughFS {
             Ok(fh) => Ok((fh, 0)),
             Err(e) => {
                 error!("open({:?}): {}", path, io::Error::from_raw_os_error(e));
-                Err(e)
+                Err(e.io_error())
             }
         }
     }
@@ -247,20 +267,20 @@ impl FilesystemMT for PassthroughFS {
     fn release(
         &self,
         _req: RequestInfo,
-        path: &ResolvedPath<'_>,
+        path: &ResolvedPath,
         fh: u64,
         _flags: u32,
         _lock_owner: u64,
         _flush: bool,
     ) -> ResultEmpty {
         debug!("release: {:?}", path);
-        libc_wrappers::close(fh)
+        libc_wrappers::close(fh).io_result()
     }
 
     fn read(
         &self,
         _req: RequestInfo,
-        path: &ResolvedPath<'_>,
+        path: &ResolvedPath,
         fh: u64,
         offset: u64,
         size: u32,
@@ -274,7 +294,7 @@ impl FilesystemMT for PassthroughFS {
 
         if let Err(e) = file.seek(SeekFrom::Start(offset)) {
             error!("seek({:?}, {}): {}", path, offset, e);
-            return callback(Err(e.raw_os_error().unwrap()));
+            return callback(Err(e));
         }
         match file.read(unsafe {
             mem::transmute::<&mut [std::mem::MaybeUninit<u8>], &mut [u8]>(data.spare_capacity_mut())
@@ -284,7 +304,7 @@ impl FilesystemMT for PassthroughFS {
             }
             Err(e) => {
                 error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
-                return callback(Err(e.raw_os_error().unwrap()));
+                return callback(Err(e));
             }
         }
 
@@ -294,7 +314,7 @@ impl FilesystemMT for PassthroughFS {
     fn write(
         &self,
         _req: RequestInfo,
-        path: &ResolvedPath<'_>,
+        path: &ResolvedPath,
         fh: u64,
         offset: u64,
         data: Vec<u8>,
@@ -306,13 +326,13 @@ impl FilesystemMT for PassthroughFS {
 
         if let Err(e) = file.seek(SeekFrom::Start(offset)) {
             error!("seek({:?}, {}): {}", path, offset, e);
-            return Err(e.raw_os_error().unwrap());
+            return Err(e);
         }
         let nwritten: u32 = match file.write(&data) {
             Ok(n) => n as u32,
             Err(e) => {
                 error!("write {:?}, {:#x} @ {:#x}: {}", path, data.len(), offset, e);
-                return Err(e.raw_os_error().unwrap());
+                return Err(e);
             }
         };
 
@@ -322,7 +342,7 @@ impl FilesystemMT for PassthroughFS {
     fn flush(
         &self,
         _req: RequestInfo,
-        path: &ResolvedPath<'_>,
+        path: &ResolvedPath,
         fh: u64,
         _lock_owner: u64,
     ) -> ResultEmpty {
@@ -332,7 +352,7 @@ impl FilesystemMT for PassthroughFS {
 
         if let Err(e) = file.flush() {
             error!("flush({:?}): {}", path, e);
-            return Err(e.raw_os_error().unwrap());
+            return Err(e);
         }
 
         Ok(())
@@ -341,7 +361,7 @@ impl FilesystemMT for PassthroughFS {
     fn fsync(
         &self,
         _req: RequestInfo,
-        path: &ResolvedPath<'_>,
+        path: &ResolvedPath,
         fh: u64,
         datasync: bool,
     ) -> ResultEmpty {
@@ -355,7 +375,7 @@ impl FilesystemMT for PassthroughFS {
             file.sync_all()
         } {
             error!("fsync({:?}, {:?}): {}", path, datasync, e);
-            return Err(e.raw_os_error().unwrap());
+            return Err(e);
         }
 
         Ok(())
@@ -364,7 +384,7 @@ impl FilesystemMT for PassthroughFS {
     fn chmod(
         &self,
         _req: RequestInfo,
-        path: &ResolvedPath<'_>,
+        path: &ResolvedPath,
         fh: Option<u64>,
         mode: u32,
     ) -> ResultEmpty {
@@ -384,7 +404,7 @@ impl FilesystemMT for PassthroughFS {
         if -1 == result {
             let e = io::Error::last_os_error();
             error!("chmod({:?}, {:#o}): {}", path, mode, e);
-            Err(e.raw_os_error().unwrap())
+            Err(e)
         } else {
             Ok(())
         }
@@ -393,7 +413,7 @@ impl FilesystemMT for PassthroughFS {
     fn chown(
         &self,
         _req: RequestInfo,
-        path: &ResolvedPath<'_>,
+        path: &ResolvedPath,
         fh: Option<u64>,
         uid: Option<u32>,
         gid: Option<u32>,
@@ -416,7 +436,7 @@ impl FilesystemMT for PassthroughFS {
         if -1 == result {
             let e = io::Error::last_os_error();
             error!("chown({:?}, {}, {}): {}", path, uid, gid, e);
-            Err(e.raw_os_error().unwrap())
+            Err(e)
         } else {
             Ok(())
         }
@@ -425,7 +445,7 @@ impl FilesystemMT for PassthroughFS {
     fn truncate(
         &self,
         _req: RequestInfo,
-        path: &ResolvedPath<'_>,
+        path: &ResolvedPath,
         fh: Option<u64>,
         size: u64,
     ) -> ResultEmpty {
@@ -445,7 +465,7 @@ impl FilesystemMT for PassthroughFS {
         if -1 == result {
             let e = io::Error::last_os_error();
             error!("truncate({:?}, {}): {}", path, size, e);
-            Err(e.raw_os_error().unwrap())
+            Err(e)
         } else {
             Ok(())
         }
@@ -454,7 +474,7 @@ impl FilesystemMT for PassthroughFS {
     fn utimens(
         &self,
         _req: RequestInfo,
-        path: &ResolvedPath<'_>,
+        path: &ResolvedPath,
         fh: Option<u64>,
         atime: Option<SystemTime>,
         mtime: Option<SystemTime>,
@@ -504,24 +524,24 @@ impl FilesystemMT for PassthroughFS {
         if -1 == result {
             let e = io::Error::last_os_error();
             error!("utimens({:?}, {:?}, {:?}): {}", path, atime, mtime, e);
-            Err(e.raw_os_error().unwrap())
+            Err(e)
         } else {
             Ok(())
         }
     }
 
-    fn readlink(&self, _req: RequestInfo, path: &ResolvedPath<'_>) -> ResultData {
+    fn readlink(&self, _req: RequestInfo, path: &ResolvedPath) -> ResultData {
         let path = path.full_path();
         debug!("readlink: {:?}", path);
 
         let real = self.real_path(&path);
         match ::std::fs::read_link(real) {
             Ok(target) => Ok(target.into_os_string().into_vec()),
-            Err(e) => Err(e.raw_os_error().unwrap()),
+            Err(e) => Err(e),
         }
     }
 
-    fn statfs(&self, _req: RequestInfo, path: &ResolvedPath<'_>) -> ResultStatfs {
+    fn statfs(&self, _req: RequestInfo, path: &ResolvedPath) -> ResultStatfs {
         let path = path.full_path();
         debug!("statfs: {:?}", path);
 
@@ -535,7 +555,7 @@ impl FilesystemMT for PassthroughFS {
         if -1 == result {
             let e = io::Error::last_os_error();
             error!("statfs({:?}): {}", path, e);
-            Err(e.raw_os_error().unwrap())
+            Err(e)
         } else {
             Ok(statfs_to_fuse(buf))
         }
@@ -544,7 +564,7 @@ impl FilesystemMT for PassthroughFS {
     fn fsyncdir(
         &self,
         _req: RequestInfo,
-        path: &ResolvedPath<'_>,
+        path: &ResolvedPath,
         fh: u64,
         datasync: bool,
     ) -> ResultEmpty {
@@ -556,13 +576,13 @@ impl FilesystemMT for PassthroughFS {
         if -1 == result {
             let e = io::Error::last_os_error();
             error!("fsyncdir({:?}): {}", path, e);
-            Err(e.raw_os_error().unwrap())
+            Err(e)
         } else {
             Ok(())
         }
     }
 
-    fn mknod(&self, _req: RequestInfo, entry: &EntryName<'_>, mode: u32, rdev: u32) -> ResultEntry {
+    fn mknod(&self, _req: RequestInfo, entry: &EntryName, mode: u32, rdev: u32) -> ResultEntry {
         debug!("mknod: {:?} (mode={:#o}, rdev={})", entry, mode, rdev);
 
         let real = PathBuf::from(self.real_path(&entry.full_path()));
@@ -574,16 +594,16 @@ impl FilesystemMT for PassthroughFS {
         if -1 == result {
             let e = io::Error::last_os_error();
             error!("mknod({:?}, {}, {}): {}", real, mode, rdev, e);
-            Err(e.raw_os_error().unwrap())
+            Err(e)
         } else {
             match libc_wrappers::lstat(real.into_os_string()) {
                 Ok(attr) => Ok((TTL, stat_to_fuse(attr))),
-                Err(e) => Err(e), // if this happens, yikes
+                Err(e) => Err(e.io_error()), // if this happens, yikes
             }
         }
     }
 
-    fn mkdir(&self, _req: RequestInfo, entry: &EntryName<'_>, mode: u32) -> ResultEntry {
+    fn mkdir(&self, _req: RequestInfo, entry: &EntryName, mode: u32) -> ResultEntry {
         debug!("mkdir {:?} (mode={:#o})", entry, mode);
 
         let real = PathBuf::from(self.real_path(&entry.full_path()));
@@ -595,39 +615,39 @@ impl FilesystemMT for PassthroughFS {
         if -1 == result {
             let e = io::Error::last_os_error();
             error!("mkdir({:?}, {:#o}): {}", real, mode, e);
-            Err(e.raw_os_error().unwrap())
+            Err(e)
         } else {
             match libc_wrappers::lstat(real.clone().into_os_string()) {
                 Ok(attr) => Ok((TTL, stat_to_fuse(attr))),
                 Err(e) => {
                     error!("lstat after mkdir({:?}, {:#o}): {}", real, mode, e);
-                    Err(e) // if this happens, yikes
+                    Err(e.io_error()) // if this happens, yikes
                 }
             }
         }
     }
 
-    fn unlink(&self, _req: RequestInfo, entry: &EntryName<'_>) -> ResultEmpty {
+    fn unlink(&self, _req: RequestInfo, entry: &EntryName) -> ResultEmpty {
         debug!("unlink {:?}", entry);
 
         let real = PathBuf::from(self.real_path(&entry.full_path()));
         fs::remove_file(&real).map_err(|ioerr| {
             error!("unlink({:?}): {}", real, ioerr);
-            ioerr.raw_os_error().unwrap()
+            ioerr
         })
     }
 
-    fn rmdir(&self, _req: RequestInfo, entry: &EntryName<'_>) -> ResultEmpty {
+    fn rmdir(&self, _req: RequestInfo, entry: &EntryName) -> ResultEmpty {
         debug!("rmdir: {:?}", entry);
 
         let real = PathBuf::from(self.real_path(&entry.full_path()));
         fs::remove_dir(&real).map_err(|ioerr| {
             error!("rmdir({:?}): {}", real, ioerr);
-            ioerr.raw_os_error().unwrap()
+            ioerr
         })
     }
 
-    fn symlink(&self, _req: RequestInfo, entry: &EntryName<'_>, target: &Path) -> ResultEntry {
+    fn symlink(&self, _req: RequestInfo, entry: &EntryName, target: &Path) -> ResultEntry {
         debug!("symlink: {:?} -> {:?}", entry, target);
 
         let real = PathBuf::from(self.real_path(&entry.full_path()));
@@ -636,38 +656,28 @@ impl FilesystemMT for PassthroughFS {
                 Ok(attr) => Ok((TTL, stat_to_fuse(attr))),
                 Err(e) => {
                     error!("lstat after symlink({:?}, {:?}): {}", real, target, e);
-                    Err(e)
+                    Err(e.io_error())
                 }
             },
             Err(e) => {
                 error!("symlink({:?}, {:?}): {}", real, target, e);
-                Err(e.raw_os_error().unwrap())
+                Err(e)
             }
         }
     }
 
-    fn rename(
-        &self,
-        _req: RequestInfo,
-        entry: &EntryName<'_>,
-        new_entry: &EntryName<'_>,
-    ) -> ResultEmpty {
+    fn rename(&self, _req: RequestInfo, entry: &EntryName, new_entry: &EntryName) -> ResultEmpty {
         debug!("rename: {:?} -> {:?}", entry, new_entry);
 
         let real = PathBuf::from(self.real_path(&entry.full_path()));
         let newreal = PathBuf::from(self.real_path(&new_entry.full_path()));
         fs::rename(&real, &newreal).map_err(|ioerr| {
             error!("rename({:?}, {:?}): {}", real, newreal, ioerr);
-            ioerr.raw_os_error().unwrap()
+            ioerr
         })
     }
 
-    fn link(
-        &self,
-        _req: RequestInfo,
-        path: &ResolvedPath<'_>,
-        new_entry: &EntryName<'_>,
-    ) -> ResultEntry {
+    fn link(&self, _req: RequestInfo, path: &ResolvedPath, new_entry: &EntryName) -> ResultEntry {
         debug!("link: {:?} -> {:?}", path, new_entry);
 
         let real = self.real_path(&path.full_path());
@@ -677,23 +687,17 @@ impl FilesystemMT for PassthroughFS {
                 Ok(attr) => Ok((TTL, stat_to_fuse(attr))),
                 Err(e) => {
                     error!("lstat after link({:?}, {:?}): {}", real, newreal, e);
-                    Err(e)
+                    Err(e.io_error())
                 }
             },
             Err(e) => {
                 error!("link({:?}, {:?}): {}", real, newreal, e);
-                Err(e.raw_os_error().unwrap())
+                Err(e)
             }
         }
     }
 
-    fn create(
-        &self,
-        _req: RequestInfo,
-        entry: &EntryName<'_>,
-        mode: u32,
-        flags: u32,
-    ) -> ResultCreate {
+    fn create(&self, _req: RequestInfo, entry: &EntryName, mode: u32, flags: u32) -> ResultCreate {
         debug!("create: {:?} (mode={:#o}, flags={:#x})", entry, mode, flags);
 
         let real = PathBuf::from(self.real_path(&entry.full_path()));
@@ -709,7 +713,7 @@ impl FilesystemMT for PassthroughFS {
         if -1 == fd {
             let ioerr = io::Error::last_os_error();
             error!("create({:?}): {}", real, ioerr);
-            Err(ioerr.raw_os_error().unwrap())
+            Err(ioerr)
         } else {
             match libc_wrappers::lstat(real.clone().into_os_string()) {
                 Ok(attr) => Ok(CreatedEntry {
@@ -724,13 +728,13 @@ impl FilesystemMT for PassthroughFS {
                         real,
                         io::Error::from_raw_os_error(e)
                     );
-                    Err(e)
+                    Err(e.io_error())
                 }
             }
         }
     }
 
-    fn listxattr(&self, _req: RequestInfo, path: &ResolvedPath<'_>, size: u32) -> ResultXattr {
+    fn listxattr(&self, _req: RequestInfo, path: &ResolvedPath, size: u32) -> ResultXattr {
         let path = path.full_path();
         debug!("listxattr: {:?}", path);
 
@@ -742,11 +746,12 @@ impl FilesystemMT for PassthroughFS {
                 mem::transmute::<&mut [std::mem::MaybeUninit<u8>], &mut [u8]>(
                     data.spare_capacity_mut(),
                 )
-            })?;
+            })
+            .io_result()?;
             unsafe { data.set_len(nread) };
             Ok(Xattr::Data(data))
         } else {
-            let nbytes = libc_wrappers::llistxattr(real, &mut [])?;
+            let nbytes = libc_wrappers::llistxattr(real, &mut []).io_result()?;
             Ok(Xattr::Size(nbytes as u32))
         }
     }
@@ -754,7 +759,7 @@ impl FilesystemMT for PassthroughFS {
     fn getxattr(
         &self,
         _req: RequestInfo,
-        path: &ResolvedPath<'_>,
+        path: &ResolvedPath,
         name: &OsStr,
         size: u32,
     ) -> ResultXattr {
@@ -769,11 +774,12 @@ impl FilesystemMT for PassthroughFS {
                 mem::transmute::<&mut [std::mem::MaybeUninit<u8>], &mut [u8]>(
                     data.spare_capacity_mut(),
                 )
-            })?;
+            })
+            .io_result()?;
             unsafe { data.set_len(nread) };
             Ok(Xattr::Data(data))
         } else {
-            let nbytes = libc_wrappers::lgetxattr(real, name.to_owned(), &mut [])?;
+            let nbytes = libc_wrappers::lgetxattr(real, name.to_owned(), &mut []).io_result()?;
             Ok(Xattr::Size(nbytes as u32))
         }
     }
@@ -781,7 +787,7 @@ impl FilesystemMT for PassthroughFS {
     fn setxattr(
         &self,
         _req: RequestInfo,
-        path: &ResolvedPath<'_>,
+        path: &ResolvedPath,
         name: &OsStr,
         value: &[u8],
         flags: u32,
@@ -797,24 +803,24 @@ impl FilesystemMT for PassthroughFS {
             position
         );
         let real = self.real_path(&path);
-        libc_wrappers::lsetxattr(real, name.to_owned(), value, flags, position)
+        libc_wrappers::lsetxattr(real, name.to_owned(), value, flags, position).io_result()
     }
 
-    fn removexattr(&self, _req: RequestInfo, path: &ResolvedPath<'_>, name: &OsStr) -> ResultEmpty {
+    fn removexattr(&self, _req: RequestInfo, path: &ResolvedPath, name: &OsStr) -> ResultEmpty {
         let path = path.full_path();
         debug!("removexattr: {:?} {:?}", path, name);
         let real = self.real_path(&path);
-        libc_wrappers::lremovexattr(real, name.to_owned())
+        libc_wrappers::lremovexattr(real, name.to_owned()).io_result()
     }
 
     #[cfg(target_os = "macos")]
     fn setvolname(&self, _req: RequestInfo, name: &OsStr) -> ResultEmpty {
         info!("setvolname: {:?}", name);
-        Err(libc::ENOTSUP)
+        Err(libc::ENOTSUP.io_error())
     }
 
     #[cfg(target_os = "macos")]
-    fn getxtimes(&self, _req: RequestInfo, path: &ResolvedPath<'_>) -> ResultXTimes {
+    fn getxtimes(&self, _req: RequestInfo, path: &ResolvedPath) -> ResultXTimes {
         debug!("getxtimes: {:?}", path);
         let xtimes = XTimes {
             bkuptime: SystemTime::UNIX_EPOCH,

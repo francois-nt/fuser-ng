@@ -8,4 +8,4 @@ workspace = ".."
 [dependencies]
 libc = "0.2"
 log = "0.4"
-fuse_mt = { path = ".." }
+fuse_mt_ng = { path = ".." }
