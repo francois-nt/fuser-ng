@@ -92,9 +92,13 @@ pub struct FileAttr {
 /// the opened file.
 #[derive(Clone, Debug)]
 pub struct CreatedEntry {
+    /// Entry cache time-to-live.
     pub ttl: Duration,
+    /// Attributes returned for the created file.
     pub attr: FileAttr,
+    /// File handle returned for the opened file.
     pub fh: u64,
+    /// Open response flags returned to fuser.
     pub flags: u32,
 }
 
@@ -102,7 +106,9 @@ pub struct CreatedEntry {
 /// size or contain data, depending on how they are called.
 #[derive(Clone, Debug)]
 pub enum Xattr {
+    /// Size needed to read the attribute value or name list.
     Size(u32),
+    /// Attribute data or null-terminated attribute name list.
     Data(Vec<u8>),
 }
 
@@ -137,6 +143,7 @@ pub struct CallbackResult {
     pub(crate) _private: std::marker::PhantomData<()>,
 }
 
+/// Path resolved from an inode with the current inode number attached.
 #[derive(Debug)]
 pub struct ResolvedPath {
     parent: Arc<PathBuf>,
@@ -145,21 +152,27 @@ pub struct ResolvedPath {
 }
 
 impl ResolvedPath {
+    /// Creates a resolved path from a parent path, entry name, and inode.
     pub fn new(parent: Arc<PathBuf>, name: OsString, ino: Inode) -> Self {
         Self { parent, name, ino }
     }
+    /// Returns the full path by joining the parent path and entry name.
     pub fn full_path(&self) -> PathBuf {
         self.parent.join(&self.name)
     }
+    /// Returns the final path component.
     pub fn name(&self) -> &OsStr {
         &self.name
     }
+    /// Returns the inode associated with this resolved path.
     pub fn ino(&self) -> Inode {
         self.ino
     }
+    /// Returns the parent directory path.
     pub fn parent_path(&self) -> Arc<PathBuf> {
         self.parent.clone()
     }
+    /// Returns the same path without the inode context.
     pub fn entry_name(&self) -> EntryName {
         EntryName {
             parent: self.parent.clone(),
@@ -168,6 +181,7 @@ impl ResolvedPath {
     }
 }
 
+/// Entry name resolved relative to a parent directory path.
 #[derive(Debug)]
 pub struct EntryName {
     parent: Arc<PathBuf>,
@@ -176,6 +190,7 @@ pub struct EntryName {
 }
 
 impl EntryName {
+    /// Attaches an inode to this entry name.
     pub fn with(self, ino: Inode) -> ResolvedPath {
         ResolvedPath {
             parent: self.parent,
@@ -183,24 +198,29 @@ impl EntryName {
             ino,
         }
     }
+    /// Creates an entry name from a parent folder path and child name.
     pub fn new(parent: FolderPath, name: OsString) -> Self {
         Self {
             parent: parent.0,
             name,
         }
     }
+    /// Returns the full path by joining the parent path and entry name.
     pub fn full_path(&self) -> PathBuf {
         self.parent.join(&self.name)
     }
+    /// Returns the final path component.
     pub fn name(&self) -> &OsStr {
         &self.name
     }
 
+    /// Returns the parent directory path.
     pub fn parent_path(&self) -> Arc<PathBuf> {
         self.parent.clone()
     }
 }
 
+/// Shared path for a directory entry in the inode table.
 #[repr(transparent)]
 #[derive(Debug)]
 pub struct FolderPath(Arc<PathBuf>);

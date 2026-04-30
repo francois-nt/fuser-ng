@@ -66,6 +66,7 @@ impl TimeOrNowExt for TimeOrNow {
     }
 }
 
+/// Path-oriented wrapper around a user filesystem implementation.
 #[derive(Debug)]
 pub struct FuserNG<T> {
     target: Arc<T>,
@@ -74,12 +75,16 @@ pub struct FuserNG<T> {
 }
 
 impl<T: Filesystem + Sync + Send + 'static> FuserNG<T> {
+    /// Creates a wrapper with a fresh inode table and directory cache.
     pub fn new(target_fs: T) -> FuserNG<T> {
         FuserNG {
             target: Arc::new(target_fs),
             table: InodeTable::new().into(),
             directory_cache: DirectoryCache::new().into(),
         }
+    }
+    fn get_path(&self, ino: INodeNo) -> Option<EntryName> {
+        self.table.try_read().unwrap().get_path(ino.0)
     }
     fn add_or_get_dir(&self, parent: INodeNo, name: &OsStr) -> Option<(u64, u64)> {
         self.table
@@ -105,11 +110,29 @@ impl<T: Filesystem + Sync + Send + 'static> FuserNG<T> {
     fn add_dir(&self, parent: INodeNo, name: &OsStr) -> Option<(u64, u64)> {
         self.table.try_write().unwrap().add_dir(parent.0, name)
     }
+    fn inode_unlink(&self, parent: INodeNo, name: &OsStr) {
+        self.table.try_write().unwrap().unlink(parent.0, name)
+    }
+    fn get_parent_inode(&self, ino: INodeNo) -> Option<u64> {
+        self.table.try_read().unwrap().get_parent_inode(ino.0)
+    }
+    fn inode_rename(
+        &self,
+        oldparent: INodeNo,
+        oldname: &OsStr,
+        newparent: INodeNo,
+        newname: &OsStr,
+    ) -> Option<()> {
+        self.table
+            .try_write()
+            .unwrap()
+            .rename(oldparent.0, oldname, newparent.0, newname)
+    }
 }
 
 macro_rules! get_entry_name {
     ($s:expr, $ino:expr, $reply:expr) => {
-        if let Some(path) = $s.table.try_read().unwrap().get_path($ino.0) {
+        if let Some(path) = $s.get_path($ino) {
             path
         } else {
             $reply.error(Errno::EINVAL);
@@ -190,10 +213,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
     fn forget(&self, _req: &fuser::Request, ino: INodeNo, nlookup: u64) {
         let lookups = self.forget(ino, nlookup);
         let path = self
-            .table
-            .try_read()
-            .unwrap()
-            .get_path(ino.0)
+            .get_path(ino)
             .unwrap_or_else(|| EntryName::new(OsStr::new("").into(), OsString::from("[unknown]")));
         debug!(
             "forget: inode {} ({:?}) now at {} lookups",
@@ -386,7 +406,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         debug!("unlink: {:?}", entry);
         match self.target.unlink(req.info(), &entry) {
             Ok(()) => {
-                self.table.try_write().unwrap().unlink(parent.0, name);
+                self.inode_unlink(parent, name);
                 reply.ok()
             }
             Err(e) => reply.error(e.into()),
@@ -398,7 +418,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         debug!("rmdir: {:?}", entry);
         match self.target.rmdir(req.info(), &entry) {
             Ok(()) => {
-                self.table.try_write().unwrap().unlink(parent.0, name);
+                self.inode_unlink(parent, name);
                 reply.ok()
             }
             Err(e) => reply.error(e.into()),
@@ -446,10 +466,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         debug!("rename: {:?} -> {:?}", entry, new_entry);
         match self.target.rename(req.info(), &entry, &new_entry) {
             Ok(()) => {
-                self.table
-                    .try_write()
-                    .unwrap()
-                    .rename(parent.0, name, newparent.0, newname);
+                self.inode_rename(parent, name, newparent, newname);
                 reply.ok()
             }
             Err(e) => reply.error(e.into()),
@@ -471,12 +488,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
             Ok((ttl, attr)) => {
                 // NOTE: this results in the new link having a different inode from the original.
                 // This is needed because our inode table is a 1:1 map between paths and inodes.
-                if let Some((new_ino, generation)) = self
-                    .table
-                    .try_write()
-                    .unwrap()
-                    .add_leaf(newparent.0, newname)
-                {
+                if let Some((new_ino, generation)) = self.add_leaf(newparent, newname) {
                     reply.entry(
                         &ttl,
                         &fuse_fileattr(attr, INodeNo(new_ino)),
@@ -639,7 +651,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         let parent_inode = if ino == INodeNo::ROOT {
             ino
         } else {
-            match self.table.try_read().unwrap().get_parent_inode(ino.0) {
+            match self.get_parent_inode(ino) {
                 Some(inode) => INodeNo(inode),
                 None => {
                     error!("readdir: unable to get parent inode for {:?}", &path);

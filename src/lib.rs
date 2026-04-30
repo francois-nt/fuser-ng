@@ -24,6 +24,7 @@ mod fuserng;
 mod inode_table;
 mod types;
 
+/// Crate version from Cargo package metadata.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub use crate::fuserng::*;
@@ -38,14 +39,18 @@ pub use fuser::MountOption;
 use std::io;
 use std::path::Path;
 
+/// Number of fuser event-loop threads used to serve a mount.
+/// This configures fuser session threading, not an internal worker pool.
 #[derive(Debug, Default)]
-pub enum ThreadPoolSize {
+pub enum ThreadCount {
+    /// Use the current machine parallelism as reported by the standard library.
     #[default]
-    Default, // default parallelism
+    Default,
+    /// Use an explicit number of fuser event-loop threads.
     NumThreads(usize),
 }
 
-impl ThreadPoolSize {
+impl ThreadCount {
     fn value(&self) -> usize {
         match self {
             Self::Default => std::thread::available_parallelism().unwrap().into(),
@@ -54,9 +59,9 @@ impl ThreadPoolSize {
     }
 }
 
-impl From<usize> for ThreadPoolSize {
+impl From<usize> for ThreadCount {
     fn from(value: usize) -> Self {
-        ThreadPoolSize::NumThreads(value)
+        ThreadCount::NumThreads(value)
     }
 }
 /// Mount the given filesystem to the given mountpoint. This function will not return until the
@@ -66,7 +71,7 @@ pub fn mount<FS: fuser::Filesystem, P: AsRef<Path>>(
     fs: FS,
     mountpoint: P,
     options: &[MountOption],
-    num_threads: ThreadPoolSize,
+    num_threads: ThreadCount,
 ) -> io::Result<()> {
     let mut config = fuser::Config::default();
     config.mount_options = options.to_vec();
@@ -83,7 +88,7 @@ pub fn spawn_mount<FS: fuser::Filesystem + Send + 'static, P: AsRef<Path>>(
     fs: FS,
     mountpoint: P,
     options: &[MountOption],
-    num_threads: ThreadPoolSize,
+    num_threads: ThreadCount,
 ) -> io::Result<fuser::BackgroundSession> {
     let mut config = fuser::Config::default();
     config.mount_options = options.to_vec();
