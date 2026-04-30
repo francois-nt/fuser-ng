@@ -3,6 +3,7 @@
 // Copyright (c) 2016-2022 by William R. Fraser
 //
 
+use crate::KernelConfig;
 use std::ffi::{OsStr, OsString};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -230,7 +231,7 @@ fn enosys_error<T>() -> std::io::Result<T> {
 /// This trait must be implemented to implement a filesystem with FuserNG.
 pub trait Filesystem {
     /// Called on mount, before any other function.
-    fn init(&self, _req: RequestInfo) -> ResultEmpty {
+    fn init(&self, _req: RequestInfo, _config: &mut KernelConfig) -> ResultEmpty {
         Ok(())
     }
 

@@ -81,6 +81,30 @@ impl<T: Filesystem + Sync + Send + 'static> FuserNG<T> {
             directory_cache: DirectoryCache::new().into(),
         }
     }
+    fn add_or_get_dir(&self, parent: INodeNo, name: &OsStr) -> Option<(u64, u64)> {
+        self.table
+            .try_write()
+            .unwrap()
+            .add_or_get_dir(parent.0, name)
+    }
+    fn add_or_get_leaf(&self, parent: INodeNo, name: &OsStr) -> Option<(u64, u64)> {
+        self.table
+            .try_write()
+            .unwrap()
+            .add_or_get_leaf(parent.0, name)
+    }
+    fn lookup(&self, ino: u64) {
+        self.table.try_write().unwrap().lookup(ino);
+    }
+    fn forget(&self, ino: INodeNo, n: u64) -> u64 {
+        self.table.try_write().unwrap().forget(ino.0, n)
+    }
+    fn add_leaf(&self, parent: INodeNo, name: &OsStr) -> Option<(u64, u64)> {
+        self.table.try_write().unwrap().add_leaf(parent.0, name)
+    }
+    fn add_dir(&self, parent: INodeNo, name: &OsStr) -> Option<(u64, u64)> {
+        self.table.try_write().unwrap().add_dir(parent.0, name)
+    }
 }
 
 macro_rules! get_entry_name {
@@ -118,10 +142,10 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
     fn init(
         &mut self,
         req: &fuser::Request,
-        _config: &mut fuser::KernelConfig, // TODO
+        config: &mut fuser::KernelConfig,
     ) -> Result<(), std::io::Error> {
         debug!("init");
-        self.target.init(req.info())
+        self.target.init(req.info(), config)
     }
 
     fn destroy(&mut self) {
@@ -144,18 +168,12 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         match self.target.getattr(req.info(), &path, None) {
             Ok((ttl, attr)) => {
                 let value = if attr.kind == FileType::Directory {
-                    self.table
-                        .try_write()
-                        .unwrap()
-                        .add_or_get_dir(parent.into(), name)
+                    self.add_or_get_dir(parent, name)
                 } else {
-                    self.table
-                        .try_write()
-                        .unwrap()
-                        .add_or_get_leaf(parent.into(), name)
+                    self.add_or_get_leaf(parent, name)
                 };
                 if let Some((ino, generation)) = value {
-                    self.table.try_write().unwrap().lookup(ino);
+                    self.lookup(ino);
                     reply.entry(
                         &ttl,
                         &fuse_fileattr(attr, INodeNo(ino)),
@@ -170,7 +188,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
     }
 
     fn forget(&self, _req: &fuser::Request, ino: INodeNo, nlookup: u64) {
-        let lookups = self.table.try_write().unwrap().forget(ino.0, nlookup);
+        let lookups = self.forget(ino, nlookup);
         let path = self
             .table
             .try_read()
@@ -316,9 +334,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         debug!("mknod: {:?}", entry);
         match self.target.mknod(req.info(), &entry, mode, rdev) {
             Ok((ttl, attr)) => {
-                if let Some((ino, generation)) =
-                    self.table.try_write().unwrap().add_leaf(parent.0, name)
-                {
+                if let Some((ino, generation)) = self.add_leaf(parent, name) {
                     reply.entry(
                         &ttl,
                         &fuse_fileattr(attr, INodeNo(ino)),
@@ -345,9 +361,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         debug!("mkdir: {:?} (mode={:#o})", entry, mode);
         match self.target.mkdir(req.info(), &entry, mode) {
             Ok((ttl, attr)) => {
-                if let Some((ino, generation)) =
-                    self.table.try_write().unwrap().add_dir(parent.0, name)
-                {
+                if let Some((ino, generation)) = self.add_dir(parent, name) {
                     reply.entry(
                         &ttl,
                         &fuse_fileattr(attr, INodeNo(ino)),
@@ -403,9 +417,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         debug!("symlink: {:?} -> {:?}", entry, link);
         match self.target.symlink(req.info(), &entry, link) {
             Ok((ttl, attr)) => {
-                if let Some((ino, generation)) =
-                    self.table.try_write().unwrap().add_leaf(parent.0, name)
-                {
+                if let Some((ino, generation)) = self.add_leaf(parent, name) {
                     reply.entry(
                         &ttl,
                         &fuse_fileattr(attr, INodeNo(ino)),
@@ -501,15 +513,16 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
     ) {
         let path = get_resolved_path!(self, ino, reply);
         debug!("read: {:?} {:#x} @ {:#x}", path, size, offset);
-        self.target.read(req.info(), &path, fh.0, offset, size, |result| {
-            match result {
-                Ok(data) => reply.data(data),
-                Err(e) => reply.error(e.into()),
-            }
-            CallbackResult {
-                _private: std::marker::PhantomData {},
-            }
-        });
+        self.target
+            .read(req.info(), &path, fh.0, offset, size, |result| {
+                match result {
+                    Ok(data) => reply.data(data),
+                    Err(e) => reply.error(e.into()),
+                }
+                CallbackResult {
+                    _private: std::marker::PhantomData {},
+                }
+            });
     }
 
     fn write(
@@ -873,9 +886,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         debug!("create: {:?} (mode={:#o}, flags={:#x})", entry, mode, flags);
         match self.target.create(req.info(), &entry, mode, flags as u32) {
             Ok(create) => {
-                if let Some((ino, generation)) =
-                    self.table.try_write().unwrap().add_leaf(parent.0, name)
-                {
+                if let Some((ino, generation)) = self.add_leaf(parent, name) {
                     let attr = fuse_fileattr(create.attr, INodeNo(ino));
                     reply.created(
                         &create.ttl,
