@@ -1,4 +1,4 @@
-// Public types exported by FuseMT.
+// Public types exported by FuserNG.
 //
 // Copyright (c) 2016-2022 by William R. Fraser
 //
@@ -227,8 +227,8 @@ fn enosys_error<T>() -> std::io::Result<T> {
     Err(std::io::Error::from_raw_os_error(libc::ENOSYS))
 }
 
-/// This trait must be implemented to implement a filesystem with FuseMT.
-pub trait FilesystemMT {
+/// This trait must be implemented to implement a filesystem with FuserNG.
+pub trait Filesystem {
     /// Called on mount, before any other function.
     fn init(&self, _req: RequestInfo) -> ResultEmpty {
         Ok(())

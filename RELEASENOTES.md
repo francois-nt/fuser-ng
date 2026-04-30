@@ -1,3 +1,6 @@
+v0.7: 2026
+  * Update `fuser` dependency to v0.17, use fuser threading, and change the inode table to fix the rename bug.
+
 v0.6.3: 2025-11-30
   * Fixed a missing inodes.unlink in rmdir, which could cause a panic in rare circumstances
 

@@ -1,11 +1,10 @@
-// FuseMT :: A wrapper around FUSE that presents paths instead of inodes and dispatches I/O
-//           operations to multiple threads.
+// FuserNG :: A wrapper around FUSE that presents paths instead of inodes.
 //
 // Copyright (c) 2016-2022 by William R. Fraser
 //
 
 use std::ffi::{OsStr, OsString};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
@@ -13,7 +12,6 @@ use fuser::{
     AccessFlags, Errno, FileHandle, FopenFlags, Generation, INodeNo, LockOwner, OpenFlags,
     RenameFlags, TimeOrNow, WriteFlags,
 };
-use threadpool::ThreadPool;
 
 use crate::FileType;
 use crate::directory_cache::*;
@@ -69,49 +67,20 @@ impl TimeOrNowExt for TimeOrNow {
 }
 
 #[derive(Debug)]
-pub struct FuseMT<T> {
+pub struct FuserNG<T> {
     target: Arc<T>,
     table: RwLock<InodeTable>,
-    threads: RwLock<Option<ThreadPool>>,
-    num_threads: usize,
     directory_cache: RwLock<DirectoryCache>,
 }
 
-impl<T: FilesystemMT + Sync + Send + 'static> FuseMT<T> {
-    pub fn new(target_fs: T, num_threads: usize) -> FuseMT<T> {
-        FuseMT {
+impl<T: Filesystem + Sync + Send + 'static> FuserNG<T> {
+    pub fn new(target_fs: T) -> FuserNG<T> {
+        FuserNG {
             target: Arc::new(target_fs),
             table: InodeTable::new().into(),
-            threads: None.into(),
-            num_threads,
             directory_cache: DirectoryCache::new().into(),
         }
     }
-
-    fn threadpool_run<F: FnOnce() + Send + 'static>(&self, f: F) {
-        if self.num_threads == 0 {
-            f();
-            return;
-        }
-
-        let threads = self.threads.try_read().unwrap();
-        if let Some(threads) = threads.as_ref() {
-            threads.execute(f);
-            return;
-        }
-
-        drop(threads);
-        let mut threads = self.threads.try_write().unwrap();
-        if threads.is_none() {
-            debug!("initializing threadpool with {} threads", self.num_threads);
-            *threads = Some(ThreadPool::new(self.num_threads));
-        }
-        threads.as_ref().unwrap().execute(f);
-    }
-}
-
-fn into_owned_resolved_path(path: ResolvedPath) -> (Arc<PathBuf>, OsString, u64) {
-    (path.parent_path(), path.name().to_os_string(), path.ino())
 }
 
 macro_rules! get_entry_name {
@@ -145,7 +114,7 @@ macro_rules! get_resolved_path {
     ($s:expr, $ino:expr, $reply:expr) => {{ get_entry_name!($s, $ino, $reply).with($ino.0) }};
 }
 
-impl<T: FilesystemMT + Sync + Send + 'static> fuser::Filesystem for FuseMT<T> {
+impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
     fn init(
         &mut self,
         req: &fuser::Request,
@@ -532,20 +501,14 @@ impl<T: FilesystemMT + Sync + Send + 'static> fuser::Filesystem for FuseMT<T> {
     ) {
         let path = get_resolved_path!(self, ino, reply);
         debug!("read: {:?} {:#x} @ {:#x}", path, size, offset);
-        let target = self.target.clone();
-        let req_info = req.info();
-        let (parent_path, name, path_ino) = into_owned_resolved_path(path);
-        self.threadpool_run(move || {
-            let path = ResolvedPath::new(parent_path, name, path_ino);
-            target.read(req_info, &path, fh.0, offset, size, |result| {
-                match result {
-                    Ok(data) => reply.data(data),
-                    Err(e) => reply.error(e.into()),
-                }
-                CallbackResult {
-                    _private: std::marker::PhantomData {},
-                }
-            });
+        self.target.read(req.info(), &path, fh.0, offset, size, |result| {
+            match result {
+                Ok(data) => reply.data(data),
+                Err(e) => reply.error(e.into()),
+            }
+            CallbackResult {
+                _private: std::marker::PhantomData {},
+            }
         });
     }
 
@@ -563,21 +526,15 @@ impl<T: FilesystemMT + Sync + Send + 'static> fuser::Filesystem for FuseMT<T> {
     ) {
         let path = get_resolved_path!(self, ino, reply);
         debug!("write: {:?} {:#x} @ {:#x}", path, data.len(), offset);
-        let target = self.target.clone();
-        let req_info = req.info();
-
-        // The data needs to be copied here before dispatching to the threadpool because it's a
-        // slice of a single buffer that `fuser` re-uses for the entire session.
+        // The target API owns the write buffer, while fuser gives us borrowed request data.
         let data_buf = Vec::from(data);
-        let (parent_path, name, path_ino) = into_owned_resolved_path(path);
-
-        self.threadpool_run(move || {
-            let path = ResolvedPath::new(parent_path, name, path_ino);
-            match target.write(req_info, &path, fh.0, offset, data_buf, flags.0 as u32) {
-                Ok(written) => reply.written(written),
-                Err(e) => reply.error(e.into()),
-            }
-        });
+        match self
+            .target
+            .write(req.info(), &path, fh.0, offset, data_buf, flags.0 as u32)
+        {
+            Ok(written) => reply.written(written),
+            Err(e) => reply.error(e.into()),
+        }
     }
 
     fn flush(
@@ -590,16 +547,10 @@ impl<T: FilesystemMT + Sync + Send + 'static> fuser::Filesystem for FuseMT<T> {
     ) {
         let path = get_resolved_path!(self, ino, reply);
         debug!("flush: {:?}", path);
-        let target = self.target.clone();
-        let req_info = req.info();
-        let (parent_path, name, path_ino) = into_owned_resolved_path(path);
-        self.threadpool_run(move || {
-            let path = ResolvedPath::new(parent_path, name, path_ino);
-            match target.flush(req_info, &path, fh.0, lock_owner.0) {
-                Ok(()) => reply.ok(),
-                Err(e) => reply.error(e.into()),
-            }
-        });
+        match self.target.flush(req.info(), &path, fh.0, lock_owner.0) {
+            Ok(()) => reply.ok(),
+            Err(e) => reply.error(e.into()),
+        }
     }
 
     fn release(
@@ -637,16 +588,10 @@ impl<T: FilesystemMT + Sync + Send + 'static> fuser::Filesystem for FuseMT<T> {
     ) {
         let path = get_resolved_path!(self, ino, reply);
         debug!("fsync: {:?}", path);
-        let target = self.target.clone();
-        let req_info = req.info();
-        let (parent_path, name, path_ino) = into_owned_resolved_path(path);
-        self.threadpool_run(move || {
-            let path = ResolvedPath::new(parent_path, name, path_ino);
-            match target.fsync(req_info, &path, fh.0, datasync) {
-                Ok(()) => reply.ok(),
-                Err(e) => reply.error(e.into()),
-            }
-        });
+        match self.target.fsync(req.info(), &path, fh.0, datasync) {
+            Ok(()) => reply.ok(),
+            Err(e) => reply.error(e.into()),
+        }
     }
 
     fn opendir(

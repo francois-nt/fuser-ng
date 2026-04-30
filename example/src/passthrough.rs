@@ -1,6 +1,6 @@
 // PassthroughFS :: A filesystem that passes all calls through to another underlying filesystem.
 //
-// Implemented using fuse_mt::FilesystemMT.
+// Implemented using fuser_ng::Filesystem.
 //
 // Copyright (c) 2016-2022 by William R. Fraser
 //
@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime};
 use crate::libc_extras::libc;
 use crate::libc_wrappers;
 
-use fuse_mt_ng::*;
+use fuser_ng::*;
 
 pub struct PassthroughFS {
     pub target: OsString,
@@ -143,7 +143,7 @@ impl<T> ToIoResult<T> for Result<T, libc::c_int> {
 
 const TTL: Duration = Duration::from_secs(1);
 
-impl FilesystemMT for PassthroughFS {
+impl Filesystem for PassthroughFS {
     fn init(&self, _req: RequestInfo) -> ResultEmpty {
         debug!("init");
         Ok(())
