@@ -144,7 +144,7 @@ impl<T> ToIoResult<T> for Result<T, libc::c_int> {
 const TTL: Duration = Duration::from_secs(1);
 
 impl Filesystem for PassthroughFS {
-    fn init(&self, _req: RequestInfo) -> ResultEmpty {
+    fn init(&self, _req: RequestInfo, _config: &mut KernelConfig) -> ResultEmpty {
         debug!("init");
         Ok(())
     }
