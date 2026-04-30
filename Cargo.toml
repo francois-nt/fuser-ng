@@ -1,9 +1,9 @@
 [package]
-name = "fuse_mt_ng"
+name = "fuser_ng"
 version = "0.7.0"
 authors = ["William R. Fraser <wfraser@codewise.org>", "François NT <francois@iobuffer.me>"]
-repository = "https://github.com/francois-nt/fuse-mt-ng"
-description = "A higher-level FUSE filesystem library with multi-threading and inode->path translation."
+repository = "https://github.com/francois-nt/fuser-ng"
+description = "A higher-level FUSE filesystem library with inode->path translation."
 categories = ["filesystem"]
 keywords = ["fuse", "filesystem"]
 license = "MIT/Apache-2.0"
@@ -11,11 +11,9 @@ readme = "README.md"
 edition = "2024"
 
 [dependencies]
-crossbeam = "0.8.4"
 fuser = "0.17"
 libc = "0.2"
 log = "0.4"
-threadpool = "1.8"
 
 [workspace]
 members = [".", "example"]

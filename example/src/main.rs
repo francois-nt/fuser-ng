@@ -1,9 +1,7 @@
-// Main Entry Point :: A fuse_mt test program.
+// Main Entry Point :: A fuser_ng test program.
 //
 // Copyright (c) 2016-2022 by William R. Fraser
 //
-
-#![deny(rust_2018_idioms)]
 
 use std::env;
 use std::ffi::OsString;
@@ -49,12 +47,13 @@ fn main() {
         target: args[1].clone(),
     };
 
-    let fuse_args = [fuse_mt_ng::MountOption::FSName("passthrufs".into())];
+    let fuse_args = [fuser_ng::MountOption::FSName("passthrufs".into())];
 
-    fuse_mt_ng::mount(
-        fuse_mt_ng::FuseMT::new(filesystem, 1),
+    fuser_ng::mount(
+        fuser_ng::FuserNG::new(filesystem),
         &args[2],
         &fuse_args[..],
+        1.into(),
     )
     .unwrap();
 }

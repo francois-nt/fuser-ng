@@ -1,12 +1,12 @@
-//! FuseMT -- A higher-level FUSE (Filesystem in Userspace) interface and wrapper around the
+//! FuserNG -- A higher-level FUSE (Filesystem in Userspace) interface and wrapper around the
 //! low-level `fuser` library that makes implementing a filesystem a bit easier.
 //!
-//! FuseMT translates inodes to paths and dispatches I/O operations to multiple threads, and
-//! simplifies some details of filesystem implementation, for example: splitting the `setattr` call
+//! FuserNG translates inodes to paths and simplifies some details of filesystem implementation,
+//! for example: splitting the `setattr` call
 //! into multiple separate operations, and simplifying the `readdir` call so that filesystems don't
 //! need to deal with pagination.
 //!
-//! To implement a filesystem, implement the `FilesystemMT` trait. Not all functions in it need to
+//! To implement a filesystem, implement the `Filesystem` trait. Not all functions in it need to
 //! be implemented -- the default behavior is to return `ENOSYS` ("Function not implemented"). For
 //! example, a read-only filesystem can skip implementing the `write` call and many others.
 
@@ -37,6 +37,27 @@ pub use fuser::MountOption;
 use std::io;
 use std::path::Path;
 
+#[derive(Debug, Default)]
+pub enum ThreadPoolSize {
+    #[default]
+    Default, // default parallelism
+    NumThreads(usize),
+}
+
+impl ThreadPoolSize {
+    fn value(&self) -> usize {
+        match self {
+            Self::Default => std::thread::available_parallelism().unwrap().into(),
+            Self::NumThreads(num_threads) => *num_threads,
+        }
+    }
+}
+
+impl From<usize> for ThreadPoolSize {
+    fn from(value: usize) -> Self {
+        ThreadPoolSize::NumThreads(value)
+    }
+}
 /// Mount the given filesystem to the given mountpoint. This function will not return until the
 /// filesystem is unmounted.
 #[inline(always)]
@@ -44,9 +65,11 @@ pub fn mount<FS: fuser::Filesystem, P: AsRef<Path>>(
     fs: FS,
     mountpoint: P,
     options: &[MountOption],
+    num_threads: ThreadPoolSize,
 ) -> io::Result<()> {
     let mut config = fuser::Config::default();
     config.mount_options = options.to_vec();
+    config.n_threads = Some(num_threads.value());
     fuser::mount2(fs, mountpoint, &config)
 }
 
@@ -59,8 +82,10 @@ pub fn spawn_mount<FS: fuser::Filesystem + Send + 'static, P: AsRef<Path>>(
     fs: FS,
     mountpoint: P,
     options: &[MountOption],
+    num_threads: ThreadPoolSize,
 ) -> io::Result<fuser::BackgroundSession> {
     let mut config = fuser::Config::default();
     config.mount_options = options.to_vec();
+    config.n_threads = Some(num_threads.value());
     fuser::spawn_mount2(fs, mountpoint, &config)
 }

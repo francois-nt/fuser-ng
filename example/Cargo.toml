@@ -1,11 +1,11 @@
 [package]
 name = "passthrufs"
 version = "0.1.0"
-authors = ["William R. Fraser <wfraser@codewise.org>"]
+authors = ["William R. Fraser <wfraser@codewise.org>", "François NT <francois@iobuffer.me>"]
 edition = "2018"
 workspace = ".."
 
 [dependencies]
 libc = "0.2"
 log = "0.4"
-fuse_mt_ng = { path = ".." }
+fuser_ng = { path = ".." }
