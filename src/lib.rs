@@ -29,12 +29,11 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use crate::fusemt::*;
 pub use crate::types::*;
 pub use fuser::FileType;
-
+pub use fuser::MountOption;
 // Forward to similarly-named fuser functions to work around deprecation for now.
 // When these are removed, we'll have to either reimplement or break reverse compat.
 // Keep the doc comments in sync with those in fuser.
 
-use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
 
@@ -44,10 +43,11 @@ use std::path::Path;
 pub fn mount<FS: fuser::Filesystem, P: AsRef<Path>>(
     fs: FS,
     mountpoint: P,
-    options: &[&OsStr],
+    options: &[MountOption],
 ) -> io::Result<()> {
-    #[allow(deprecated)]
-    fuser::mount(fs, mountpoint, options)
+    let mut config = fuser::Config::default();
+    config.mount_options = options.to_vec();
+    fuser::mount2(fs, mountpoint, &config)
 }
 
 /// Mount the given filesystem to the given mountpoint. This function spawns a background thread to
@@ -58,8 +58,9 @@ pub fn mount<FS: fuser::Filesystem, P: AsRef<Path>>(
 pub fn spawn_mount<FS: fuser::Filesystem + Send + 'static, P: AsRef<Path>>(
     fs: FS,
     mountpoint: P,
-    options: &[&OsStr],
+    options: &[MountOption],
 ) -> io::Result<fuser::BackgroundSession> {
-    #[allow(deprecated)]
-    fuser::spawn_mount(fs, mountpoint, options)
+    let mut config = fuser::Config::default();
+    config.mount_options = options.to_vec();
+    fuser::spawn_mount2(fs, mountpoint, &config)
 }

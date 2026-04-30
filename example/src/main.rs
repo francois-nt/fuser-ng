@@ -6,7 +6,7 @@
 #![deny(rust_2018_idioms)]
 
 use std::env;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 
 #[macro_use]
 extern crate log;
@@ -49,10 +49,10 @@ fn main() {
         target: args[1].clone(),
     };
 
-    let fuse_args = [OsStr::new("-o"), OsStr::new("fsname=passthrufs")];
+    let fuse_args = [fuse_mt_ng::MountOption::FSName("passthrufs".into())];
 
-    fuse_mt::mount(
-        fuse_mt::FuseMT::new(filesystem, 1),
+    fuse_mt_ng::mount(
+        fuse_mt_ng::FuseMT::new(filesystem, 1),
         &args[2],
         &fuse_args[..],
     )

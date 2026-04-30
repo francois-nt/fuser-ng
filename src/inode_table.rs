@@ -19,8 +19,8 @@ pub trait InodeToPath: std::fmt::Debug {
     fn add_or_get_leaf(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
     fn add_or_get_dir(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
     fn forget(&mut self, inode: Inode, n: LookupCount) -> LookupCount;
-    fn get_path(&self, inode: Inode) -> Option<EntryName<'_>>;
-    fn resolve_from_parent<'a>(&'a self, parent: Inode, name: &'a OsStr) -> Option<EntryName<'a>> {
+    fn get_path(&self, inode: Inode) -> Option<EntryName>;
+    fn resolve_from_parent(&self, parent: Inode, name: OsString) -> Option<EntryName> {
         let parent = self.get_folder_path(parent)?;
         Some(EntryName::new(parent, name))
     }
@@ -521,10 +521,10 @@ impl InodeToPath for InodeTable {
         lookups
     }
 
-    fn get_path(&self, inode: Inode) -> Option<EntryName<'_>> {
+    fn get_path(&self, inode: Inode) -> Option<EntryName> {
         self.get_entry(inode)?
             .path(&self.table)
-            .map(|val| EntryName::new(val.0.into(), val.1))
+            .map(|val| EntryName::new(val.0.into(), val.1.into()))
     }
 
     fn get_folder_path(&self, inode: Inode) -> Option<FolderPath> {
@@ -630,7 +630,7 @@ impl InodeToPath for InodeTable {
 }
 
 #[cfg(test)]
-// Tests for the tree-backed table; the historical table stays in old.
+// Tests for the tree-backed table
 mod tests {
     use super::InodeToPath;
     use super::{Inode, InodeTable};
