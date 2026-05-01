@@ -45,7 +45,7 @@ Add the crate to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-fuser_ng = "0.7"
+fuser-ng = "0.7"
 ```
 
 Implement `fuser_ng::Filesystem`, then wrap it before mounting:
