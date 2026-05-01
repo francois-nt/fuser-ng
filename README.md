@@ -1,15 +1,86 @@
-# FUSER-NG
+# fuser_ng
 
-This code is a wrapper on top of the Rust FUSE crate with the following additions:
-* Translate inodes into paths, to simplify filesystem implementation.
+`fuser_ng` is a higher-level, path-oriented FUSE filesystem library for Rust,
+built on top of [`fuser`](https://github.com/cberner/fuser) 0.17.
 
-fuser-ng started as a fork of fuse-mt, updated for fuser 0.17, and now focuses on providing a higher-level path-oriented API on top of `fuser`.
+It started as a fork of `fuse-mt`. Version 0.7 updates the crate for `fuser`
+0.17, uses fuser's native threading instead of an internal thread pool, and
+adds a new inode table that keeps descendant paths correct when a parent
+directory is renamed.
 
-The `fuser` crate provides a minimal, low-level access to the FUSE kernel API, whereas this crate is more high-level, like the FUSE C API.
+## Overview
 
-It includes a sample filesystem that uses the crate to pass all system calls through to another filesystem at any arbitrary path.
+`fuser` exposes low-level FUSE kernel operations. `fuser_ng` wraps those
+operations with an API that is closer to the FUSE C API and simpler to
+implement for path-based filesystems.
 
-This is a work-in-progress. Bug reports, pull requests, and other feedback are welcome!
+The crate:
 
-Some note on the implementation:
-* The trait that filesystems will implement is called `Filesystem`, and instead of the FUSE crate's convention of having methods return void and including a "reply" parameter, the methods return their values. This feels more idiomatic to me. They also take `&ResolvedPath` or `&EntryName` arguments instead of only inode numbers.
+* translates FUSE inodes into paths;
+* lets `Filesystem` methods return `std::io::Result` values instead of using
+  fuser reply objects directly;
+* provides default `ENOSYS` implementations for operations you do not support;
+* simplifies `readdir` by handling FUSE pagination internally;
+* uses fuser's threaded event loop, configurable with `ThreadCount`.
+
+## Path API
+
+Filesystem methods receive path-oriented types instead of raw inode numbers:
+
+* `EntryName` is a child name resolved relative to a parent directory. It is
+  used for operations such as `mkdir`, `create`, `unlink`, and `rename`.
+* `ResolvedPath` is an existing entry path with its inode attached. It is used
+  for operations such as `open`, `read`, `write`, and `getattr`.
+* `FolderPath` is the shared path stored for a directory.
+
+The inode table stores complete paths for directories and derives leaf paths
+from their parent directories. This keeps descendants consistent after a
+directory subtree is renamed.
+
+## Usage
+
+Add the crate to your `Cargo.toml`:
+
+```toml
+[dependencies]
+fuser_ng = "0.7"
+```
+
+Implement `fuser_ng::Filesystem`, then wrap it before mounting:
+
+```rust
+let options = [fuser_ng::MountOption::FSName("myfs".into())];
+
+fuser_ng::mount(
+    fuser_ng::FuserNG::new(filesystem),
+    mountpoint,
+    &options,
+    fuser_ng::ThreadCount::Default,
+)?;
+```
+
+## Passthrough example
+
+The workspace includes a passthrough filesystem that forwards operations to
+another directory:
+
+```sh
+cargo run -p passthrufs -- <target> <mountpoint>
+fusermount3 -u <mountpoint>
+```
+
+## Testing
+
+```sh
+cargo test --workspace
+cargo clippy --workspace --tests
+```
+
+## Status
+
+This crate is a work in progress. Version 0.7 is a breaking update from the
+old `fuse-mt` API. Bug reports, pull requests, and feedback are welcome.
+
+## License
+
+Licensed under either MIT or Apache-2.0.

@@ -334,7 +334,6 @@ fn check_xattrs(path: &Path) -> io::Result<()> {
 }
 
 #[test]
-//#[ignore = "requires a working FUSE setup and permission to mount"]
 fn passthrough_exercises_fuse_methods() -> io::Result<()> {
     let backing = TempDir::new("backing")?;
     let mount = TempDir::new("mount")?;
