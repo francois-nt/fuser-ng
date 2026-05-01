@@ -84,37 +84,31 @@ impl<T: Filesystem + Sync + Send + 'static> FuserNG<T> {
         }
     }
     fn get_path(&self, ino: INodeNo) -> Option<EntryName> {
-        self.table.try_read().unwrap().get_path(ino.0)
+        self.table.read().unwrap().get_path(ino.0)
     }
     fn add_or_get_dir(&self, parent: INodeNo, name: &OsStr) -> Option<(u64, u64)> {
-        self.table
-            .try_write()
-            .unwrap()
-            .add_or_get_dir(parent.0, name)
+        self.table.write().unwrap().add_or_get_dir(parent.0, name)
     }
     fn add_or_get_leaf(&self, parent: INodeNo, name: &OsStr) -> Option<(u64, u64)> {
-        self.table
-            .try_write()
-            .unwrap()
-            .add_or_get_leaf(parent.0, name)
+        self.table.write().unwrap().add_or_get_leaf(parent.0, name)
     }
     fn lookup(&self, ino: u64) {
-        self.table.try_write().unwrap().lookup(ino);
+        self.table.write().unwrap().lookup(ino);
     }
     fn forget(&self, ino: INodeNo, n: u64) -> u64 {
-        self.table.try_write().unwrap().forget(ino.0, n)
+        self.table.write().unwrap().forget(ino.0, n)
     }
     fn add_leaf(&self, parent: INodeNo, name: &OsStr) -> Option<(u64, u64)> {
-        self.table.try_write().unwrap().add_leaf(parent.0, name)
+        self.table.write().unwrap().add_leaf(parent.0, name)
     }
     fn add_dir(&self, parent: INodeNo, name: &OsStr) -> Option<(u64, u64)> {
-        self.table.try_write().unwrap().add_dir(parent.0, name)
+        self.table.write().unwrap().add_dir(parent.0, name)
     }
     fn inode_unlink(&self, parent: INodeNo, name: &OsStr) {
-        self.table.try_write().unwrap().unlink(parent.0, name)
+        self.table.write().unwrap().unlink(parent.0, name)
     }
     fn get_parent_inode(&self, ino: INodeNo) -> Option<u64> {
-        self.table.try_read().unwrap().get_parent_inode(ino.0)
+        self.table.read().unwrap().get_parent_inode(ino.0)
     }
     fn inode_rename(
         &self,
@@ -124,7 +118,7 @@ impl<T: Filesystem + Sync + Send + 'static> FuserNG<T> {
         newname: &OsStr,
     ) -> Option<()> {
         self.table
-            .try_write()
+            .write()
             .unwrap()
             .rename(oldparent.0, oldname, newparent.0, newname)
     }
@@ -145,7 +139,7 @@ macro_rules! resolve_from_parent {
     ($s:expr, $ino:expr, $name:expr, $reply:expr) => {
         if let Some(path) = $s
             .table
-            .try_read()
+            .read()
             .unwrap()
             .resolve_from_parent($ino.0, $name.into())
         {
@@ -630,7 +624,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         debug!("opendir: {:?}", path);
         match self.target.opendir(req.info(), &path, flags.0 as u32) {
             Ok((fh, flags)) => {
-                let dcache_key = self.directory_cache.try_write().unwrap().new_entry(fh);
+                let dcache_key = self.directory_cache.write().unwrap().new_entry(fh);
                 reply.opened(FileHandle(dcache_key), FopenFlags::from_bits_retain(flags));
             }
             Err(e) => reply.error(e.into()),
@@ -663,7 +657,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
 
         let cached_entries = {
             self.directory_cache
-                .try_write()
+                .write()
                 .unwrap()
                 .get_mut(fh.0)
                 .entries
@@ -673,15 +667,12 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         let entries = match cached_entries {
             Some(entries) => entries,
             None => {
-                let real_fh = self.directory_cache.try_read().unwrap().real_fh(fh.0);
+                let real_fh = self.directory_cache.read().unwrap().real_fh(fh.0);
                 debug!("entries not yet fetched; requesting with fh {}", real_fh);
                 match self.target.readdir(req.info(), &path, real_fh) {
                     Ok(entries) => {
-                        self.directory_cache
-                            .try_write()
-                            .unwrap()
-                            .get_mut(fh.0)
-                            .entries = Some(entries.clone());
+                        self.directory_cache.write().unwrap().get_mut(fh.0).entries =
+                            Some(entries.clone());
                         entries
                     }
                     Err(e) => {
@@ -738,7 +729,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
     ) {
         let path = get_resolved_path!(self, ino, reply);
         debug!("releasedir: {:?}", path);
-        let real_fh = self.directory_cache.try_read().unwrap().real_fh(fh.0);
+        let real_fh = self.directory_cache.read().unwrap().real_fh(fh.0);
         match self
             .target
             .releasedir(req.info(), &path, real_fh, flags.0 as u32)
@@ -746,7 +737,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
             Ok(()) => reply.ok(),
             Err(e) => reply.error(e.into()),
         }
-        self.directory_cache.try_write().unwrap().delete(fh.0);
+        self.directory_cache.write().unwrap().delete(fh.0);
     }
 
     fn fsyncdir(
@@ -759,7 +750,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
     ) {
         let path = get_resolved_path!(self, ino, reply);
         debug!("fsyncdir: {:?} (datasync: {:?})", path, datasync);
-        let real_fh = self.directory_cache.try_read().unwrap().real_fh(fh.0);
+        let real_fh = self.directory_cache.read().unwrap().real_fh(fh.0);
         match self.target.fsyncdir(req.info(), &path, real_fh, datasync) {
             Ok(()) => reply.ok(),
             Err(e) => reply.error(e.into()),
