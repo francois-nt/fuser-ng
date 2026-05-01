@@ -75,7 +75,10 @@ pub fn mount<FS: fuser::Filesystem, P: AsRef<Path>>(
 ) -> io::Result<()> {
     let mut config = fuser::Config::default();
     config.mount_options = options.to_vec();
-    config.n_threads = Some(num_threads.value());
+    let num_threads = num_threads.value();
+    if num_threads > 0 {
+        config.n_threads = Some(num_threads);
+    }
     fuser::mount2(fs, mountpoint, &config)
 }
 
@@ -92,6 +95,9 @@ pub fn spawn_mount<FS: fuser::Filesystem + Send + 'static, P: AsRef<Path>>(
 ) -> io::Result<fuser::BackgroundSession> {
     let mut config = fuser::Config::default();
     config.mount_options = options.to_vec();
-    config.n_threads = Some(num_threads.value());
+    let num_threads = num_threads.value();
+    if num_threads > 0 {
+        config.n_threads = Some(num_threads);
+    }
     fuser::spawn_mount2(fs, mountpoint, &config)
 }
