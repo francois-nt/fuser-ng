@@ -1,6 +1,6 @@
-# fuser_ng
+# fuser-ng
 
-`fuser_ng` is a higher-level, path-oriented FUSE filesystem library for Rust,
+`fuser-ng` is a higher-level, path-oriented FUSE filesystem library for Rust,
 built on top of [`fuser`](https://github.com/cberner/fuser) 0.17.
 
 It started as a fork of `fuse-mt`. Version 0.7 updates the crate for `fuser`
