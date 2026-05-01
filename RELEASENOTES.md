@@ -1,5 +1,12 @@
-v0.7: 2026
-  * Update `fuser` dependency to v0.17, use fuser threading, and change the inode table to fix the rename bug.
+v0.7.0: 2026-05-01
+  * Breaking change: rename the crate to `fuser_ng` and update the API around the new `FuserNG` wrapper.
+  * Update `fuser` dependency to v0.17 and adapt to its typed API.
+  * Remove the internal thread pool and use fuser's native threaded event loop.
+  * Add the path-oriented `EntryName`, `ResolvedPath`, and `FolderPath` API.
+  * Replace the inode table with a directory-aware implementation that keeps descendant paths correct after parent directory renames.
+  * Add unit coverage for inode reuse, add-or-get behavior, leaf and directory renames, unlink with open descendants, duplicate rejection, and parent/child path consistency.
+  * Add a passthrough FUSE integration test covering common file, directory, rename, xattr, statfs, sync, and open-handle operations.
+  * Fix `passthrufs` `fsyncdir` to fsync the file descriptor behind the `DIR` handle.
 
 v0.6.3: 2025-11-30
   * Fixed a missing inodes.unlink in rmdir, which could cause a panic in rare circumstances

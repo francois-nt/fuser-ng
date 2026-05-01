@@ -21,7 +21,9 @@ The crate:
   fuser reply objects directly;
 * provides default `ENOSYS` implementations for operations you do not support;
 * simplifies `readdir` by handling FUSE pagination internally;
-* uses fuser's threaded event loop, configurable with `ThreadCount`.
+* uses fuser's threaded event loop, configurable with `ThreadCount`;
+* adds broader unit and integration test coverage than the original `fuse-mt`
+  codebase, including inode-table rename cases and passthrough FUSE operations.
 
 ## Path API
 
