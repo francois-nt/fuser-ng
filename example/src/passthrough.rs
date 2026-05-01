@@ -572,7 +572,9 @@ impl Filesystem for PassthroughFS {
         debug!("fsyncdir: {:?} (datasync = {:?})", path, datasync);
 
         // TODO: what does datasync mean with regards to a directory handle?
-        let result = unsafe { libc::fsync(fh as libc::c_int) };
+        let dir = fh as usize as *mut libc::DIR;
+        let fd = unsafe { libc::dirfd(dir) };
+        let result = unsafe { libc::fsync(fd) };
         if -1 == result {
             let e = io::Error::last_os_error();
             error!("fsyncdir({:?}): {}", path, e);

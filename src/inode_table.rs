@@ -634,6 +634,7 @@ impl InodeToPath for InodeTable {
 mod tests {
     use super::InodeToPath;
     use super::{Inode, InodeTable};
+    use std::collections::HashMap;
     use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
 
@@ -651,6 +652,119 @@ mod tests {
     fn assert_folder_path(table: &InodeTable, inode: Inode, expected: &str) {
         let path = table.get_folder_path(inode).unwrap();
         assert_eq!(Path::new(expected), path.as_path());
+    }
+
+    fn assert_no_path(table: &InodeTable, inode: Inode) {
+        assert!(table.get_path(inode).is_none());
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum ModelKind {
+        Dir,
+        Leaf,
+    }
+
+    #[derive(Clone, Debug)]
+    struct ModelNode {
+        parent: Inode,
+        name: &'static str,
+        kind: ModelKind,
+        live: bool,
+    }
+
+    #[derive(Debug)]
+    struct Model {
+        nodes: HashMap<Inode, ModelNode>,
+    }
+
+    impl Model {
+        fn new() -> Self {
+            let mut nodes = HashMap::new();
+            nodes.insert(
+                1,
+                ModelNode {
+                    parent: 1,
+                    name: "",
+                    kind: ModelKind::Dir,
+                    live: true,
+                },
+            );
+            Self { nodes }
+        }
+
+        fn add(&mut self, inode: Inode, parent: Inode, name: &'static str, kind: ModelKind) {
+            assert_eq!(
+                Some(ModelKind::Dir),
+                self.nodes.get(&parent).map(|node| node.kind)
+            );
+            assert!(self.live_child(parent, name).is_none());
+            assert!(
+                self.nodes
+                    .insert(
+                        inode,
+                        ModelNode {
+                            parent,
+                            name,
+                            kind,
+                            live: true,
+                        },
+                    )
+                    .is_none()
+            );
+        }
+
+        fn live_child(&self, parent: Inode, name: &str) -> Option<Inode> {
+            self.nodes.iter().find_map(|(inode, node)| {
+                (node.live && node.parent == parent && node.name == name).then_some(*inode)
+            })
+        }
+
+        fn rename(
+            &mut self,
+            oldparent: Inode,
+            oldname: &str,
+            newparent: Inode,
+            newname: &'static str,
+        ) {
+            let moved = self.live_child(oldparent, oldname).unwrap();
+            if let Some(replaced) = self.live_child(newparent, newname) {
+                self.nodes.get_mut(&replaced).unwrap().live = false;
+            }
+
+            let moved = self.nodes.get_mut(&moved).unwrap();
+            moved.parent = newparent;
+            moved.name = newname;
+            moved.live = true;
+        }
+
+        fn unlink(&mut self, parent: Inode, name: &str) {
+            let removed = self.live_child(parent, name).unwrap();
+            self.nodes.get_mut(&removed).unwrap().live = false;
+        }
+
+        fn path(&self, inode: Inode) -> PathBuf {
+            if inode == 1 {
+                return PathBuf::from("/");
+            }
+
+            let node = &self.nodes[&inode];
+            self.path(node.parent).join(node.name)
+        }
+
+        fn assert_paths_match(&self, table: &InodeTable) {
+            for (&inode, node) in &self.nodes {
+                assert_eq!(self.path(inode), table.get_path(inode).unwrap().full_path());
+
+                if node.kind == ModelKind::Dir {
+                    let folder_path = table
+                        .get_folder_path(inode)
+                        .map(|path| path.as_path().to_path_buf());
+                    assert_eq!(Some(self.path(inode)), folder_path);
+                } else {
+                    assert!(table.get_folder_path(inode).is_none());
+                }
+            }
+        }
     }
 
     #[test]
@@ -743,6 +857,126 @@ mod tests {
         assert_path(&table, child, "/dir/child");
         assert!(table.get_folder_path(child).is_none());
         assert_eq!(Some(dir), table.get_parent_inode(child));
+    }
+
+    #[test]
+    fn duplicate_names_and_wrong_parent_kinds_are_rejected() {
+        let mut table = InodeTable::new();
+
+        let (dir, dir_generation) = table.add_dir(1, name("dir")).unwrap();
+        let (leaf, leaf_generation) = table.add_leaf(dir, name("leaf")).unwrap();
+
+        assert!(table.add_dir(1, name("dir")).is_none());
+        assert!(table.add_leaf(1, name("dir")).is_none());
+        assert_eq!(
+            Some((dir, dir_generation)),
+            table.add_or_get_dir(1, name("dir"))
+        );
+        assert!(table.add_or_get_leaf(1, name("dir")).is_none());
+
+        assert!(table.add_leaf(dir, name("leaf")).is_none());
+        assert!(table.add_dir(dir, name("leaf")).is_none());
+        assert_eq!(
+            Some((leaf, leaf_generation)),
+            table.add_or_get_leaf(dir, name("leaf"))
+        );
+        assert!(table.add_or_get_dir(dir, name("leaf")).is_none());
+
+        assert!(table.add_leaf(leaf, name("child")).is_none());
+        assert!(table.add_dir(leaf, name("child")).is_none());
+    }
+
+    #[test]
+    fn moving_leaf_between_directories_updates_live_binding() {
+        let mut table = InodeTable::new();
+
+        let (left, _) = table.add_dir(1, name("left")).unwrap();
+        let (right, _) = table.add_dir(1, name("right")).unwrap();
+        let (file, generation) = table.add_leaf(left, name("file")).unwrap();
+
+        assert_eq!(
+            Some(()),
+            table.rename(left, name("file"), right, name("file"))
+        );
+        assert_path(&table, file, "/right/file");
+        assert_eq!(Some(right), table.get_parent_inode(file));
+
+        let (again, again_generation) = table.add_or_get_leaf(right, name("file")).unwrap();
+        assert_eq!(file, again);
+        assert_eq!(generation, again_generation);
+
+        let (new_left_file, _) = table.add_or_get_leaf(left, name("file")).unwrap();
+        assert_ne!(file, new_left_file);
+        assert_path(&table, new_left_file, "/left/file");
+    }
+
+    #[test]
+    fn unlinking_directory_with_open_descendants_keeps_paths_until_forget_chain() {
+        let mut table = InodeTable::new();
+
+        let (dir, _) = table.add_dir(1, name("dir")).unwrap();
+        let (child_dir, _) = table.add_dir(dir, name("child")).unwrap();
+        let (leaf, _) = table.add_leaf(child_dir, name("leaf")).unwrap();
+
+        table.unlink(1, name("dir"));
+
+        assert_path(&table, dir, "/dir");
+        assert_path(&table, child_dir, "/dir/child");
+        assert_path(&table, leaf, "/dir/child/leaf");
+
+        let (new_dir, _) = table.add_or_get_dir(1, name("dir")).unwrap();
+        assert_ne!(dir, new_dir);
+
+        assert_eq!(0, table.forget(dir, 1));
+        assert_path(&table, dir, "/dir");
+        assert_eq!(0, table.forget(child_dir, 1));
+        assert_path(&table, child_dir, "/dir/child");
+        assert_eq!(0, table.forget(leaf, 1));
+
+        assert_no_path(&table, dir);
+        assert_no_path(&table, child_dir);
+        assert_no_path(&table, leaf);
+        assert_path(&table, new_dir, "/dir");
+    }
+
+    #[test]
+    fn scripted_model_matches_inode_table_paths() {
+        let mut table = InodeTable::new();
+        let mut model = Model::new();
+
+        let (a, _) = table.add_dir(1, name("a")).unwrap();
+        model.add(a, 1, "a", ModelKind::Dir);
+        let (b, _) = table.add_dir(1, name("b")).unwrap();
+        model.add(b, 1, "b", ModelKind::Dir);
+        let (a_file, _) = table.add_leaf(a, name("file")).unwrap();
+        model.add(a_file, a, "file", ModelKind::Leaf);
+        let (sub, _) = table.add_dir(a, name("sub")).unwrap();
+        model.add(sub, a, "sub", ModelKind::Dir);
+        let (deep, _) = table.add_leaf(sub, name("deep")).unwrap();
+        model.add(deep, sub, "deep", ModelKind::Leaf);
+        let (b_file, _) = table.add_leaf(b, name("file")).unwrap();
+        model.add(b_file, b, "file", ModelKind::Leaf);
+
+        assert_eq!(Some(()), table.rename(a, name("sub"), b, name("moved")));
+        model.rename(a, "sub", b, "moved");
+
+        assert_eq!(Some(()), table.rename(b, name("file"), a, name("file")));
+        model.rename(b, "file", a, "file");
+
+        table.unlink(b, name("moved"));
+        model.unlink(b, "moved");
+
+        model.assert_paths_match(&table);
+        assert_path(&table, a_file, "/a/file");
+        assert_path(&table, b_file, "/a/file");
+        assert_path(&table, deep, "/b/moved/deep");
+
+        let (live_a_file, _) = table.add_or_get_leaf(a, name("file")).unwrap();
+        assert_eq!(b_file, live_a_file);
+
+        let (new_moved, _) = table.add_or_get_dir(b, name("moved")).unwrap();
+        assert_ne!(sub, new_moved);
+        assert_path(&table, new_moved, "/b/moved");
     }
 
     #[test]
