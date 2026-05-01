@@ -1,14 +1,15 @@
 [package]
-name = "fuser_ng"
+name = "fuser-ng"
 version = "0.7.0"
 authors = ["William R. Fraser <wfraser@codewise.org>", "François NT <francois@iobuffer.me>"]
 repository = "https://github.com/francois-nt/fuser-ng"
 description = "A higher-level FUSE filesystem library with inode->path translation."
-categories = ["filesystem"]
-keywords = ["fuse", "filesystem"]
-license = "MIT/Apache-2.0"
+categories = ["filesystem", "os::unix-apis"]
+keywords = ["fuse", "fuser", "filesystem", "mount", "userspace"]
+license = "MIT OR Apache-2.0"
 readme = "README.md"
 edition = "2024"
+rust-version = "1.85"
 
 [dependencies]
 fuser = "0.17"

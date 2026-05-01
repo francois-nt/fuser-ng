@@ -67,6 +67,24 @@ impl TimeOrNowExt for TimeOrNow {
 }
 
 /// Path-oriented wrapper around a user filesystem implementation.
+///
+/// ```no_run
+/// struct EmptyFs;
+///
+/// impl fuser_ng::Filesystem for EmptyFs {}
+///
+/// # fn main() -> std::io::Result<()> {
+/// let options = [fuser_ng::MountOption::FSName("emptyfs".into())];
+///
+/// fuser_ng::mount(
+///     fuser_ng::FuserNG::new(EmptyFs),
+///     "/tmp/emptyfs",
+///     &options,
+///     fuser_ng::ThreadCount::Default,
+/// )?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug)]
 pub struct FuserNG<T> {
     target: Arc<T>,

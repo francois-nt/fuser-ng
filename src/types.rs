@@ -249,6 +249,48 @@ fn enosys_error<T>() -> std::io::Result<T> {
 }
 
 /// This trait must be implemented to implement a filesystem with FuserNG.
+///
+/// Methods have default ENOSYS implementations, so a filesystem can implement only the operations
+/// it supports.
+///
+/// ```no_run
+/// use std::io;
+/// use std::time::{Duration, SystemTime};
+///
+/// use fuser_ng::{EntryName, FileAttr, FileType, Filesystem, RequestInfo, ResultEntry};
+///
+/// struct RootOnly;
+///
+/// impl Filesystem for RootOnly {
+///     fn getattr(&self, _req: RequestInfo, path: &EntryName, _fh: Option<u64>) -> ResultEntry {
+///         if path.full_path() != std::path::Path::new("/") {
+///             return Err(io::Error::from_raw_os_error(libc::ENOENT));
+///         }
+///
+///         let now = SystemTime::now();
+///
+///         Ok((
+///             Duration::from_secs(1),
+///             FileAttr {
+///                 size: 0,
+///                 blocks: 0,
+///                 atime: now,
+///                 mtime: now,
+///                 ctime: now,
+///                 crtime: now,
+///                 kind: FileType::Directory,
+///                 perm: 0o755,
+///                 nlink: 2,
+///                 uid: 0,
+///                 gid: 0,
+///                 rdev: 0,
+///                 blksize: 512,
+///                 flags: 0,
+///             },
+///         ))
+///     }
+/// }
+/// ```
 pub trait Filesystem {
     /// Called on mount, before any other function.
     fn init(&self, _req: RequestInfo, _config: &mut KernelConfig) -> ResultEmpty {
