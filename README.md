@@ -1,6 +1,6 @@
 # fuser-ng
 
-[![Cargo Checks](https://github.com/francois-nt/fuser-ng/actions/workflows/cargo-test.yml/badge.svg)](https://github.com/francois-nt/fuser-ng/actions/workflows/cargo-test.yml)
+![Cargo Checks](https://github.com/francois-nt/fuser-ng/actions/workflows/cargo-test.yml/badge.svg)
 
 `fuser-ng` is a higher-level, path-oriented FUSE filesystem library for Rust,
 built on top of [`fuser`](https://github.com/cberner/fuser) 0.17.
