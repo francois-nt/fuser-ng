@@ -10,7 +10,7 @@ directory is renamed.
 
 ## Overview
 
-`fuser` exposes low-level FUSE kernel operations. `fuser_ng` wraps those
+`fuser` exposes low-level FUSE kernel operations. `fuser-ng` wraps those
 operations with an API that is closer to the FUSE C API and simpler to
 implement for path-based filesystems.
 
