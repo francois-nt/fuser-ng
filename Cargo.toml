@@ -10,6 +10,14 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 edition = "2024"
 rust-version = "1.85"
+include = [
+    "Cargo.toml",
+    "README.md",
+    "RELEASENOTES.md",
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
+    "src/**",
+]
 
 [dependencies]
 fuser = "0.17"
@@ -18,3 +26,4 @@ log = "0.4"
 
 [workspace]
 members = [".", "example"]
+
