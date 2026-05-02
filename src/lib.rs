@@ -1,3 +1,5 @@
+#![doc = include_str!("../DOC.md")]
+
 //! FuserNG -- A higher-level FUSE (Filesystem in Userspace) interface and wrapper around the
 //! low-level `fuser` library that makes implementing a filesystem a bit easier.
 //!
@@ -11,7 +13,7 @@
 //! example, a read-only filesystem can skip implementing the `write` call and many others.
 
 //
-// Copyright (c) 2016-2022 by William R. Fraser
+// Copyright (c) 2016-2022 by William R. Fraser, 2026 by François NT
 //
 
 #[macro_use]
@@ -20,9 +22,6 @@ mod directory_cache;
 mod fuserng;
 mod inode_table;
 mod types;
-
-/// Crate version from Cargo package metadata.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub use crate::fuserng::*;
 pub use crate::types::*;

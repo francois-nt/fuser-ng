@@ -1,6 +1,6 @@
 // InodeTable :: a bi-directional map of paths to inodes.
 //
-// Copyright (c) 2016-2022 by William R. Fraser
+// Copyright (c) 2016-2022 by William R. Fraser, 2026 by François NT
 //
 
 use crate::{EntryName, FolderPath, Inode};
@@ -12,7 +12,7 @@ use std::sync::Arc;
 pub type Generation = u64;
 pub type LookupCount = u64;
 
-pub trait InodeToPath: std::fmt::Debug {
+pub(crate) trait InodeToPath: std::fmt::Debug {
     fn add_leaf(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
     fn add_dir(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
     fn add_or_get_leaf(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
@@ -44,17 +44,17 @@ mod child_key {
 
     /// Borrowed child key used for zero-allocation lookups.
     #[derive(Clone, Copy, Debug)]
-    pub struct ChildKeyRef<'a> {
+    pub(super) struct ChildKeyRef<'a> {
         parent: Inode,
         name: &'a OsStr,
     }
 
     impl<'a> ChildKeyRef<'a> {
-        pub fn new(parent: Inode, name: &'a OsStr) -> Self {
+        pub(super) fn new(parent: Inode, name: &'a OsStr) -> Self {
             Self { parent, name }
         }
 
-        pub fn name(&self) -> &OsStr {
+        pub(super) fn name(&self) -> &OsStr {
             self.name
         }
     }
@@ -76,7 +76,7 @@ mod child_key {
 
     /// Owned child key stored in the live parent/name index.
     #[derive(Debug)]
-    pub struct ChildKey {
+    pub(super) struct ChildKey {
         _name: OsString,
         // Although borrowed stores a 'static reference internally,
         // it is only exposed through &self via Borrow, so callers cannot obtain a
@@ -85,7 +85,7 @@ mod child_key {
     }
 
     impl ChildKey {
-        pub fn new(parent: Inode, name: OsString) -> Self {
+        pub(super) fn new(parent: Inode, name: OsString) -> Self {
             // Safety:
             // ref_name points into the heap buffer owned by _name.
             // Moving name into Self does not move that buffer.
@@ -210,13 +210,13 @@ impl InodeEntry {
 /// Tree-backed inode table with live child and folder-path indexes.
 #[derive(Debug)]
 
-pub struct InodeTable {
+pub(crate) struct InodeTable {
     inner: parking_lot::RwLock<InnerInodeTable>,
 }
 
 impl InodeTable {
     /// Creates a table containing only the root inode.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             inner: InnerInodeTable::new().into(),
         }

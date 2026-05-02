@@ -1,7 +1,5 @@
 # fuser-ng
 
-![Cargo Checks](https://github.com/francois-nt/fuser-ng/actions/workflows/cargo-test.yml/badge.svg)
-
 `fuser-ng` is a higher-level, path-oriented FUSE filesystem library for Rust,
 built on top of [`fuser`](https://github.com/cberner/fuser) 0.17.
 
@@ -60,30 +58,3 @@ fuser_ng::mount(
     &options,
     fuser_ng::ThreadCount::Default,
 )?;
-```
-
-## Passthrough example
-
-The workspace includes a passthrough filesystem that forwards operations to
-another directory:
-
-```sh
-cargo run -p passthrufs -- <target> <mountpoint>
-fusermount3 -u <mountpoint>
-```
-
-## Testing
-
-```sh
-cargo test --workspace
-cargo clippy --workspace --tests
-```
-
-## Status
-
-This crate is a work in progress. Version 0.7 is a breaking update from the
-old `fuse-mt` API. Bug reports, pull requests, and feedback are welcome.
-
-## License
-
-Licensed under either MIT or Apache-2.0.

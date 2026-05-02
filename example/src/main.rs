@@ -1,6 +1,6 @@
 // Main Entry Point :: A fuser_ng test program.
 //
-// Copyright (c) 2016-2022 by William R. Fraser
+// Copyright (c) 2016-2022 by William R. Fraser, 2026 by François NT
 //
 
 use std::env;
