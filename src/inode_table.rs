@@ -3,22 +3,21 @@
 // Copyright (c) 2016-2022 by William R. Fraser
 //
 
+use crate::{EntryName, FolderPath, Inode};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::{EntryName, FolderPath, Inode};
-
 pub type Generation = u64;
 pub type LookupCount = u64;
 
 pub trait InodeToPath: std::fmt::Debug {
-    fn add_leaf(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
-    fn add_dir(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
-    fn add_or_get_leaf(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
-    fn add_or_get_dir(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
-    fn forget(&mut self, inode: Inode, n: LookupCount) -> LookupCount;
+    fn add_leaf(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
+    fn add_dir(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
+    fn add_or_get_leaf(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
+    fn add_or_get_dir(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
+    fn forget(&self, inode: Inode, n: LookupCount) -> LookupCount;
     fn get_path(&self, inode: Inode) -> Option<EntryName>;
     fn resolve_from_parent(&self, parent: Inode, name: OsString) -> Option<EntryName> {
         let parent = self.get_folder_path(parent)?;
@@ -26,15 +25,15 @@ pub trait InodeToPath: std::fmt::Debug {
     }
     fn get_folder_path(&self, inode: Inode) -> Option<FolderPath>;
     fn get_parent_inode(&self, ino: Inode) -> Option<Inode>;
-    fn lookup(&mut self, inode: Inode);
+    fn lookup(&self, inode: Inode);
     fn rename(
-        &mut self,
+        &self,
         oldparent: Inode,
         oldname: &OsStr,
         newparent: Inode,
         newname: &OsStr,
     ) -> Option<()>;
-    fn unlink(&mut self, parent: Inode, name: &OsStr);
+    fn unlink(&self, parent: Inode, name: &OsStr);
 }
 
 mod child_key {
@@ -124,6 +123,7 @@ mod child_key {
 
 /// Cached path data for directory inodes.
 #[derive(Debug)]
+
 struct FolderEntry {
     parent: Inode,
     path: Arc<PathBuf>,
@@ -161,6 +161,7 @@ impl FolderEntry {
 
 /// File-like entry whose full path is derived from its parent directory.
 #[derive(Debug)]
+
 struct LeafEntry {
     parent: Inode,
     name: OsString,
@@ -168,6 +169,7 @@ struct LeafEntry {
 
 /// Occupancy state for a table slot.
 #[derive(Debug)]
+
 enum Entry {
     Vacant,
     Root,
@@ -177,6 +179,7 @@ enum Entry {
 
 /// Metadata stored for one inode slot.
 #[derive(Debug)]
+
 struct InodeEntry {
     entry: Entry,
     linked: bool,
@@ -206,7 +209,37 @@ impl InodeEntry {
 
 /// Tree-backed inode table with live child and folder-path indexes.
 #[derive(Debug)]
+
 pub struct InodeTable {
+    inner: parking_lot::RwLock<InnerInodeTable>,
+}
+
+impl InodeTable {
+    /// Creates a table containing only the root inode.
+    pub fn new() -> Self {
+        Self {
+            inner: InnerInodeTable::new().into(),
+        }
+    }
+    fn access_write<R, F: FnOnce(&mut InnerInodeTable) -> R>(&self, cb: F) -> R {
+        let mut this = self.inner.write();
+        cb(&mut this)
+    }
+    fn access_read<R, F: FnOnce(&InnerInodeTable) -> R>(&self, cb: F) -> R {
+        let this = self.inner.read();
+        cb(&this)
+    }
+}
+
+impl Default for InodeTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Tree-backed inode table with live child and folder-path indexes.
+#[derive(Debug)]
+struct InnerInodeTable {
     // Inode n is stored at table[n - 1].
     table: Vec<InodeEntry>,
     // Vacant slots that can be reused with a bumped generation.
@@ -216,9 +249,10 @@ pub struct InodeTable {
     // Live folders sorted by path for subtree renames.
     folder_list: BTreeMap<Arc<PathBuf>, usize>,
 }
-impl InodeTable {
+
+impl InnerInodeTable {
     /// Creates a table containing only the root inode.
-    pub fn new() -> Self {
+    fn new() -> Self {
         let root = Arc::new(PathBuf::from("/"));
         let mut folder_list = BTreeMap::new();
         folder_list.insert(root, 0);
@@ -490,72 +524,79 @@ impl InodeTable {
 }
 
 impl InodeToPath for InodeTable {
-    fn add_leaf(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)> {
-        self.add_child(parent, name, false, 1, false)
+    fn add_leaf(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)> {
+        self.access_write(|inner| inner.add_child(parent, name, false, 1, false))
     }
 
-    fn add_dir(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)> {
-        self.add_child(parent, name, true, 1, false)
+    fn add_dir(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)> {
+        self.access_write(|inner| inner.add_child(parent, name, true, 1, false))
     }
 
-    fn add_or_get_leaf(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)> {
-        self.add_child(parent, name, false, 0, true)
+    fn add_or_get_leaf(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)> {
+        self.access_write(|inner| inner.add_child(parent, name, false, 0, true))
     }
 
-    fn add_or_get_dir(&mut self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)> {
-        self.add_child(parent, name, true, 0, true)
+    fn add_or_get_dir(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)> {
+        self.access_write(|inner| inner.add_child(parent, name, true, 0, true))
     }
 
-    fn forget(&mut self, inode: Inode, n: LookupCount) -> LookupCount {
+    fn forget(&self, inode: Inode, n: LookupCount) -> LookupCount {
         if inode == 1 {
             return 1;
         }
-
-        let idx = inode as usize - 1;
-        let entry = &mut self.table[idx];
-        assert!(!matches!(entry.entry, Entry::Vacant));
-        assert!(n <= entry.lookups);
-        entry.lookups -= n;
-        let lookups = entry.lookups;
-        self.maybe_free_inode(idx);
-        lookups
+        self.access_write(|inner| {
+            let idx = inode as usize - 1;
+            let entry = &mut inner.table[idx];
+            assert!(!matches!(entry.entry, Entry::Vacant));
+            assert!(n <= entry.lookups);
+            entry.lookups -= n;
+            let lookups = entry.lookups;
+            inner.maybe_free_inode(idx);
+            lookups
+        })
     }
 
     fn get_path(&self, inode: Inode) -> Option<EntryName> {
-        self.get_entry(inode)?
-            .path(&self.table)
-            .map(|val| EntryName::new(val.0.into(), val.1.into()))
+        self.access_read(|inner| {
+            inner
+                .get_entry(inode)?
+                .path(&inner.table)
+                .map(|val| EntryName::new(val.0.into(), val.1.into()))
+        })
     }
 
     fn get_folder_path(&self, inode: Inode) -> Option<FolderPath> {
-        match &self.get_entry(inode)?.entry {
-            Entry::Root => Some(Arc::new(PathBuf::from("/"))),
-            Entry::Folder(folder) => Some(folder.path()),
-            _ => None,
-        }
-        .map(|v| v.into())
+        self.access_read(|inner| {
+            match &inner.get_entry(inode)?.entry {
+                Entry::Root => Some(Arc::new(PathBuf::from("/"))),
+                Entry::Folder(folder) => Some(folder.path()),
+                _ => None,
+            }
+            .map(|v| v.into())
+        })
     }
 
     fn get_parent_inode(&self, ino: Inode) -> Option<Inode> {
-        match &self.get_entry(ino)?.entry {
+        self.access_read(|inner| match &inner.get_entry(ino)?.entry {
             Entry::Folder(folder) => Some(folder.parent),
             Entry::Leaf(leaf) => Some(leaf.parent),
             _ => None,
-        }
+        })
     }
 
-    fn lookup(&mut self, inode: Inode) {
+    fn lookup(&self, inode: Inode) {
         if inode == 1 {
             return;
         }
-
-        let entry = &mut self.table[inode as usize - 1];
-        assert!(!matches!(entry.entry, Entry::Vacant));
-        entry.lookups += 1;
+        self.access_write(|inner| {
+            let entry = &mut inner.table[inode as usize - 1];
+            assert!(!matches!(entry.entry, Entry::Vacant));
+            entry.lookups += 1;
+        })
     }
 
     fn rename(
-        &mut self,
+        &self,
         oldparent: Inode,
         oldname: &OsStr,
         newparent: Inode,
@@ -565,67 +606,73 @@ impl InodeToPath for InodeTable {
             return Some(());
         }
 
-        let old_key = Self::child_key_ref(oldparent, oldname);
-        let idx = *self.children.get(&old_key)?;
+        let old_key = InnerInodeTable::child_key_ref(oldparent, oldname);
 
-        let new_parent_path = self.live_dir_path(newparent)?;
-        let old_folder_path = match &self.table[idx].entry {
-            Entry::Folder(folder) => Some(folder.path()),
-            Entry::Leaf(_) => None,
-            _ => return None, // exit function
-        };
+        self.access_write(|inner| {
+            let idx = *inner.children.get(&old_key)?;
 
-        // Remove any replaced live entry before inserting the moved one.
-        let new_key = Self::child_key_ref(newparent, newname);
-        let replaced_idx = self.children.get(&new_key).copied();
-        if let Some(replaced_idx) = replaced_idx {
-            self.remove_live_indexes(replaced_idx);
-            self.maybe_free_inode(replaced_idx);
-        }
+            let new_parent_path = inner.live_dir_path(newparent)?;
+            let old_folder_path = match &inner.table[idx].entry {
+                Entry::Folder(folder) => Some(folder.path()),
+                Entry::Leaf(_) => None,
+                _ => return None, // exit function
+            };
 
-        self.children.remove(&old_key);
-        self.children
-            .insert(Self::child_key(newparent, newname.into()), idx);
-
-        if oldparent != newparent {
-            self.table[oldparent as usize - 1].child_count -= 1;
-            self.table[newparent as usize - 1].child_count += 1;
-        }
-
-        // Folder entries cache paths, so moving one may update its subtree.
-        let mut moved_folder = None;
-        match &mut self.table[idx].entry {
-            Entry::Folder(folder) => {
-                let new_path = Arc::new(new_parent_path.join(newname));
-                folder.parent = newparent;
-                folder.set_path(new_path.clone());
-                moved_folder = Some((old_folder_path?, new_path));
+            // Remove any replaced live entry before inserting the moved one.
+            let new_key = InnerInodeTable::child_key_ref(newparent, newname);
+            let replaced_idx = inner.children.get(&new_key).copied();
+            if let Some(replaced_idx) = replaced_idx {
+                inner.remove_live_indexes(replaced_idx);
+                inner.maybe_free_inode(replaced_idx);
             }
-            Entry::Leaf(leaf) => {
-                leaf.parent = newparent;
-                leaf.name = newname.to_os_string();
+
+            inner.children.remove(&old_key);
+            inner
+                .children
+                .insert(InnerInodeTable::child_key(newparent, newname.into()), idx);
+
+            if oldparent != newparent {
+                inner.table[oldparent as usize - 1].child_count -= 1;
+                inner.table[newparent as usize - 1].child_count += 1;
             }
-            _ => return None, // exit function
-        }
 
-        if let Some((old_path, new_path)) = moved_folder {
-            self.rename_folder_subtree(old_path, new_path)?;
-        }
+            // Folder entries cache paths, so moving one may update its subtree.
+            let mut moved_folder = None;
+            match &mut inner.table[idx].entry {
+                Entry::Folder(folder) => {
+                    let new_path = Arc::new(new_parent_path.join(newname));
+                    folder.parent = newparent;
+                    folder.set_path(new_path.clone());
+                    moved_folder = Some((old_folder_path?, new_path));
+                }
+                Entry::Leaf(leaf) => {
+                    leaf.parent = newparent;
+                    leaf.name = newname.to_os_string();
+                }
+                _ => return None, // exit function
+            }
 
-        self.table[idx].linked = true;
-        Some(())
+            if let Some((old_path, new_path)) = moved_folder {
+                inner.rename_folder_subtree(old_path, new_path)?;
+            }
+
+            inner.table[idx].linked = true;
+            Some(())
+        })
     }
 
-    fn unlink(&mut self, parent: Inode, name: &OsStr) {
+    fn unlink(&self, parent: Inode, name: &OsStr) {
         // Remove the live name; open inodes are freed later.
-        let key = Self::child_key_ref(parent, name);
-        if let Some(idx) = self.children.remove(&key) {
-            if let Entry::Folder(folder) = &self.table[idx].entry {
-                self.folder_list.remove(&folder.path);
+        let key = InnerInodeTable::child_key_ref(parent, name);
+        self.access_write(|inner| {
+            if let Some(idx) = inner.children.remove(&key) {
+                if let Entry::Folder(folder) = &inner.table[idx].entry {
+                    inner.folder_list.remove(&folder.path);
+                }
+                inner.table[idx].linked = false;
+                inner.maybe_free_inode(idx);
             }
-            self.table[idx].linked = false;
-            self.maybe_free_inode(idx);
-        }
+        })
     }
 }
 
@@ -769,7 +816,7 @@ mod tests {
 
     #[test]
     fn inode_numbers_are_reused_after_forget() {
-        let mut table = InodeTable::new();
+        let table = InodeTable::new();
 
         let (inode1, generation1) = table.add_leaf(1, name("a")).unwrap();
         assert_ne!(1, inode1);
@@ -792,7 +839,7 @@ mod tests {
 
     #[test]
     fn add_or_get_returns_existing_inode_without_lookup() {
-        let mut table = InodeTable::new();
+        let table = InodeTable::new();
 
         let (inode1, generation1) = table.add_or_get_leaf(1, name("a")).unwrap();
         assert_eq!(0, generation1);
@@ -813,7 +860,7 @@ mod tests {
 
     #[test]
     fn rename_leaf_keeps_inode_and_updates_live_name() {
-        let mut table = InodeTable::new();
+        let table = InodeTable::new();
 
         let (inode, generation) = table.add_leaf(1, name("a")).unwrap();
         assert_path(&table, inode, "/a");
@@ -829,7 +876,7 @@ mod tests {
 
     #[test]
     fn unlink_removes_live_name_but_keeps_open_inode_path() {
-        let mut table = InodeTable::new();
+        let table = InodeTable::new();
 
         let (inode, _) = table.add_leaf(1, name("bar")).unwrap();
         table.unlink(1, name("bar"));
@@ -845,7 +892,7 @@ mod tests {
 
     #[test]
     fn folders_report_paths_and_parent_inodes() {
-        let mut table = InodeTable::new();
+        let table = InodeTable::new();
 
         let (dir, _) = table.add_dir(1, name("dir")).unwrap();
         let (child, _) = table.add_leaf(dir, name("child")).unwrap();
@@ -861,7 +908,7 @@ mod tests {
 
     #[test]
     fn duplicate_names_and_wrong_parent_kinds_are_rejected() {
-        let mut table = InodeTable::new();
+        let table = InodeTable::new();
 
         let (dir, dir_generation) = table.add_dir(1, name("dir")).unwrap();
         let (leaf, leaf_generation) = table.add_leaf(dir, name("leaf")).unwrap();
@@ -888,7 +935,7 @@ mod tests {
 
     #[test]
     fn moving_leaf_between_directories_updates_live_binding() {
-        let mut table = InodeTable::new();
+        let table = InodeTable::new();
 
         let (left, _) = table.add_dir(1, name("left")).unwrap();
         let (right, _) = table.add_dir(1, name("right")).unwrap();
@@ -912,7 +959,7 @@ mod tests {
 
     #[test]
     fn unlinking_directory_with_open_descendants_keeps_paths_until_forget_chain() {
-        let mut table = InodeTable::new();
+        let table = InodeTable::new();
 
         let (dir, _) = table.add_dir(1, name("dir")).unwrap();
         let (child_dir, _) = table.add_dir(dir, name("child")).unwrap();
@@ -941,7 +988,7 @@ mod tests {
 
     #[test]
     fn scripted_model_matches_inode_table_paths() {
-        let mut table = InodeTable::new();
+        let table = InodeTable::new();
         let mut model = Model::new();
 
         let (a, _) = table.add_dir(1, name("a")).unwrap();
@@ -981,7 +1028,7 @@ mod tests {
 
     #[test]
     fn forget_keeps_parent_directory_until_children_are_gone() {
-        let mut table = InodeTable::new();
+        let table = InodeTable::new();
 
         let (dir, _) = table.add_dir(1, name("dir")).unwrap();
         let (child, _) = table.add_leaf(dir, name("child")).unwrap();
@@ -997,7 +1044,7 @@ mod tests {
 
     #[test]
     fn renaming_parent_directory_updates_descendant_paths() {
-        let mut table = InodeTable::new();
+        let table = InodeTable::new();
 
         let (parent, parent_generation) = table.add_dir(1, name("parent")).unwrap();
         let (child_dir, _) = table.add_dir(parent, name("child")).unwrap();
@@ -1027,7 +1074,7 @@ mod tests {
 
     #[test]
     fn moving_directory_to_another_parent_updates_descendant_paths() {
-        let mut table = InodeTable::new();
+        let table = InodeTable::new();
 
         let (source, _) = table.add_dir(1, name("source")).unwrap();
         let (destination, _) = table.add_dir(1, name("destination")).unwrap();
@@ -1053,7 +1100,7 @@ mod tests {
 
     #[test]
     fn renaming_directory_does_not_move_path_prefix_siblings() {
-        let mut table = InodeTable::new();
+        let table = InodeTable::new();
 
         let (foo, _) = table.add_dir(1, name("foo")).unwrap();
         let (foo_child, _) = table.add_dir(foo, name("child")).unwrap();
@@ -1080,7 +1127,7 @@ mod tests {
 
     #[test]
     fn rename_over_existing_leaf_keeps_new_name_bound_to_moved_inode() {
-        let mut table = InodeTable::new();
+        let table = InodeTable::new();
 
         let (moved, moved_generation) = table.add_leaf(1, name("a")).unwrap();
         let (replaced, _) = table.add_leaf(1, name("b")).unwrap();

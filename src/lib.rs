@@ -14,11 +14,8 @@
 // Copyright (c) 2016-2022 by William R. Fraser
 //
 
-#![deny(rust_2018_idioms)]
-
 #[macro_use]
 extern crate log;
-
 mod directory_cache;
 mod fuserng;
 mod inode_table;

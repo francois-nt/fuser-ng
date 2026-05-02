@@ -88,7 +88,7 @@ impl TimeOrNowExt for TimeOrNow {
 #[derive(Debug)]
 pub struct FuserNG<T> {
     target: Arc<T>,
-    table: RwLock<InodeTable>,
+    table: InodeTable,
     directory_cache: RwLock<DirectoryCache>,
 }
 
@@ -97,36 +97,36 @@ impl<T: Filesystem + Sync + Send + 'static> FuserNG<T> {
     pub fn new(target_fs: T) -> FuserNG<T> {
         FuserNG {
             target: Arc::new(target_fs),
-            table: InodeTable::new().into(),
+            table: InodeTable::new(),
             directory_cache: DirectoryCache::new().into(),
         }
     }
     fn get_path(&self, ino: INodeNo) -> Option<EntryName> {
-        self.table.read().unwrap().get_path(ino.0)
+        self.table.get_path(ino.0)
     }
     fn add_or_get_dir(&self, parent: INodeNo, name: &OsStr) -> Option<(u64, u64)> {
-        self.table.write().unwrap().add_or_get_dir(parent.0, name)
+        self.table.add_or_get_dir(parent.0, name)
     }
     fn add_or_get_leaf(&self, parent: INodeNo, name: &OsStr) -> Option<(u64, u64)> {
-        self.table.write().unwrap().add_or_get_leaf(parent.0, name)
+        self.table.add_or_get_leaf(parent.0, name)
     }
     fn lookup(&self, ino: u64) {
-        self.table.write().unwrap().lookup(ino);
+        self.table.lookup(ino);
     }
     fn forget(&self, ino: INodeNo, n: u64) -> u64 {
-        self.table.write().unwrap().forget(ino.0, n)
+        self.table.forget(ino.0, n)
     }
     fn add_leaf(&self, parent: INodeNo, name: &OsStr) -> Option<(u64, u64)> {
-        self.table.write().unwrap().add_leaf(parent.0, name)
+        self.table.add_leaf(parent.0, name)
     }
     fn add_dir(&self, parent: INodeNo, name: &OsStr) -> Option<(u64, u64)> {
-        self.table.write().unwrap().add_dir(parent.0, name)
+        self.table.add_dir(parent.0, name)
     }
     fn inode_unlink(&self, parent: INodeNo, name: &OsStr) {
-        self.table.write().unwrap().unlink(parent.0, name)
+        self.table.unlink(parent.0, name)
     }
     fn get_parent_inode(&self, ino: INodeNo) -> Option<u64> {
-        self.table.read().unwrap().get_parent_inode(ino.0)
+        self.table.get_parent_inode(ino.0)
     }
     fn inode_rename(
         &self,
@@ -136,8 +136,6 @@ impl<T: Filesystem + Sync + Send + 'static> FuserNG<T> {
         newname: &OsStr,
     ) -> Option<()> {
         self.table
-            .write()
-            .unwrap()
             .rename(oldparent.0, oldname, newparent.0, newname)
     }
 }
@@ -155,12 +153,7 @@ macro_rules! get_entry_name {
 
 macro_rules! resolve_from_parent {
     ($s:expr, $ino:expr, $name:expr, $reply:expr) => {
-        if let Some(path) = $s
-            .table
-            .read()
-            .unwrap()
-            .resolve_from_parent($ino.0, $name.into())
-        {
+        if let Some(path) = $s.table.resolve_from_parent($ino.0, $name.into()) {
             path
         } else {
             $reply.error(Errno::EINVAL);
