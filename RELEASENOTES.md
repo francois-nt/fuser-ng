@@ -1,3 +1,9 @@
+v0.7.1: 2026-05-02
+  * Use a dedicated `DOC.md` for the published crates.io and docs.rs package documentation.
+  * Include the package documentation as the crate-level rustdoc page.
+  * Hide internal inode-table and path helper APIs from the public API surface.
+  * Move inode-table synchronization inside `InodeTable`, allowing shared-reference access from `FuserNG`.
+
 v0.7.0: 2026-05-01
   * Breaking change: rename the crate to `fuser_ng` and update the API around the new `FuserNG` wrapper.
   * Update `fuser` dependency to v0.17 and adapt to its typed API.
