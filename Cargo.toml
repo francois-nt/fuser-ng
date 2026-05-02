@@ -1,6 +1,6 @@
 [package]
 name = "fuser-ng"
-version = "0.7.0"
+version = "0.7.1"
 authors = ["William R. Fraser <wfraser@codewise.org>", "François NT <francois@iobuffer.me>"]
 repository = "https://github.com/francois-nt/fuser-ng"
 description = "A higher-level FUSE filesystem library with inode->path translation."

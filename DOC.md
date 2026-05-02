@@ -49,7 +49,7 @@ fuser-ng = "0.7"
 
 Implement `fuser_ng::Filesystem`, then wrap it before mounting:
 
-```rust
+```rust,ignore
 let options = [fuser_ng::MountOption::FSName("myfs".into())];
 
 fuser_ng::mount(

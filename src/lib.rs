@@ -1,16 +1,16 @@
 #![doc = include_str!("../DOC.md")]
 
-//! FuserNG -- A higher-level FUSE (Filesystem in Userspace) interface and wrapper around the
-//! low-level `fuser` library that makes implementing a filesystem a bit easier.
-//!
-//! FuserNG translates inodes to paths and simplifies some details of filesystem implementation,
-//! for example: splitting the `setattr` call
-//! into multiple separate operations, and simplifying the `readdir` call so that filesystems don't
-//! need to deal with pagination.
-//!
-//! To implement a filesystem, implement the `Filesystem` trait. Not all functions in it need to
-//! be implemented -- the default behavior is to return `ENOSYS` ("Function not implemented"). For
-//! example, a read-only filesystem can skip implementing the `write` call and many others.
+// FuserNG -- A higher-level FUSE (Filesystem in Userspace) interface and wrapper around the
+// low-level `fuser`` library that makes implementing a filesystem a bit easier.
+//
+// FuserNG translates inodes to paths and simplifies some details of filesystem implementation,
+// for example: splitting the `setattr` call
+// into multiple separate operations, and simplifying the `readdir` call so that filesystems don't
+// need to deal with pagination.
+//
+// To implement a filesystem, implement the `Filesystem` trait. Not all functions in it need to
+// be implemented -- the default behavior is to return `ENOSYS` ("Function not implemented"). For
+// example, a read-only filesystem can skip implementing the `write` call and many others.
 
 //
 // Copyright (c) 2016-2022 by William R. Fraser, 2026 by François NT
