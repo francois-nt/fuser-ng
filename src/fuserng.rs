@@ -4,7 +4,7 @@
 //
 
 use std::ffi::{OsStr, OsString};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
@@ -217,9 +217,12 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
 
     fn forget(&self, _req: &fuser::Request, ino: INodeNo, nlookup: u64) {
         let lookups = self.forget(ino, nlookup);
-        let path = self
-            .get_path(ino)
-            .unwrap_or_else(|| EntryName::new(OsStr::new("").into(), OsString::from("[unknown]")));
+        let path = self.get_path(ino).unwrap_or_else(|| {
+            EntryName::new(
+                Arc::new(PathBuf::from(OsStr::new(""))).into(),
+                OsString::from("[unknown]").into(),
+            )
+        });
         debug!(
             "forget: inode {} ({:?}) now at {} lookups",
             ino, path, lookups

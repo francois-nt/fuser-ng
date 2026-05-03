@@ -144,14 +144,14 @@ pub struct CallbackResult {
 #[derive(Debug)]
 pub struct ResolvedPath {
     parent: Arc<PathBuf>,
-    name: OsString,
+    name: Arc<OsStr>,
     ino: Inode,
 }
 
 impl ResolvedPath {
     /// Returns the full path by joining the parent path and entry name.
     pub fn full_path(&self) -> PathBuf {
-        self.parent.join(&self.name)
+        self.parent.join(self.name.as_ref())
     }
     /// Returns the final path component.
     pub fn name(&self) -> &OsStr {
@@ -179,7 +179,7 @@ impl ResolvedPath {
 pub struct EntryName {
     parent: Arc<PathBuf>,
     //parent_ino: Inode,
-    name: OsString,
+    name: Arc<OsStr>,
 }
 
 impl EntryName {
@@ -192,7 +192,7 @@ impl EntryName {
         }
     }
     /// Creates an entry name from a parent folder path and child name.
-    pub(crate) fn new(parent: FolderPath, name: OsString) -> Self {
+    pub(crate) fn new(parent: FolderPath, name: Arc<OsStr>) -> Self {
         Self {
             parent: parent.0,
             name,
@@ -200,7 +200,7 @@ impl EntryName {
     }
     /// Returns the full path by joining the parent path and entry name.
     pub fn full_path(&self) -> PathBuf {
-        self.parent.join(&self.name)
+        self.parent.join(self.name.as_ref())
     }
     /// Returns the final path component.
     pub fn name(&self) -> &OsStr {

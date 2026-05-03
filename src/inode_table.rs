@@ -21,7 +21,7 @@ pub(crate) trait InodeToPath: std::fmt::Debug {
     fn get_path(&self, inode: Inode) -> Option<EntryName>;
     fn resolve_from_parent(&self, parent: Inode, name: OsString) -> Option<EntryName> {
         let parent = self.get_folder_path(parent)?;
-        Some(EntryName::new(parent, name))
+        Some(EntryName::new(parent, name.into()))
     }
     fn get_folder_path(&self, inode: Inode) -> Option<FolderPath>;
     fn get_parent_inode(&self, ino: Inode) -> Option<Inode>;
@@ -39,8 +39,9 @@ pub(crate) trait InodeToPath: std::fmt::Debug {
 mod child_key {
     use super::Inode;
     use std::borrow::Borrow;
-    use std::ffi::{OsStr, OsString};
+    use std::ffi::OsStr;
     use std::hash::{Hash, Hasher};
+    use std::sync::Arc;
 
     /// Borrowed child key used for zero-allocation lookups.
     #[derive(Clone, Copy, Debug)]
@@ -77,7 +78,7 @@ mod child_key {
     /// Owned child key stored in the live parent/name index.
     #[derive(Debug)]
     pub(super) struct ChildKey {
-        _name: OsString,
+        _name: Arc<OsStr>,
         // Although borrowed stores a 'static reference internally,
         // it is only exposed through &self via Borrow, so callers cannot obtain a
         // reference that outlives the ChildKey value
@@ -85,13 +86,13 @@ mod child_key {
     }
 
     impl ChildKey {
-        pub(super) fn new(parent: Inode, name: OsString) -> Self {
+        pub(super) fn new(parent: Inode, name: Arc<OsStr>) -> Self {
             // Safety:
             // ref_name points into the heap buffer owned by _name.
             // Moving name into Self does not move that buffer.
             // After construction, _name must never be mutated or replaced, or borrowed
             // would dangle!
-            let ref_name: &'static OsStr = unsafe { (*(&name as *const OsString)).as_os_str() };
+            let ref_name: &'static OsStr = unsafe { &(*(name.as_ref() as *const OsStr)) };
             let borrowed = ChildKeyRef::new(parent, ref_name);
             Self {
                 _name: name,
@@ -128,14 +129,14 @@ struct FolderEntry {
     parent: Inode,
     path: Arc<PathBuf>,
     parent_path: Arc<PathBuf>,
-    name: OsString,
+    name: Arc<OsStr>,
 }
 
 impl FolderEntry {
     /// Builds a directory entry from a live parent path and child name.
-    fn with_parent(parent: Inode, parent_path: Arc<PathBuf>, name: OsString) -> Self {
+    fn with_parent(parent: Inode, parent_path: Arc<PathBuf>, name: Arc<OsStr>) -> Self {
         Self {
-            path: Arc::new(parent_path.join(&name)),
+            path: Arc::new(parent_path.join(name.as_ref())),
             parent,
             parent_path,
             name,
@@ -144,7 +145,7 @@ impl FolderEntry {
 
     /// Replaces cached directory path metadata after a rename.
     fn set_path(&mut self, full_path: Arc<PathBuf>) -> Option<()> {
-        self.name = full_path.file_name()?.into();
+        self.name = Arc::from(full_path.file_name()?.to_os_string());
         self.parent_path = Arc::new(full_path.parent()?.into());
         self.path = full_path;
         Some(())
@@ -164,7 +165,19 @@ impl FolderEntry {
 
 struct LeafEntry {
     parent: Inode,
-    name: OsString,
+    name: Arc<OsStr>,
+}
+
+#[derive(Debug)]
+struct RootEntry {
+    path: Arc<PathBuf>,
+    name: Arc<OsStr>,
+}
+
+impl RootEntry {
+    fn to_pair(&self) -> (Arc<PathBuf>, Arc<OsStr>) {
+        (self.path.clone(), self.name.clone())
+    }
 }
 
 /// Occupancy state for a table slot.
@@ -172,9 +185,19 @@ struct LeafEntry {
 
 enum Entry {
     Vacant,
-    Root,
+    Root(RootEntry),
     Folder(FolderEntry),
     Leaf(LeafEntry),
+}
+
+#[inline(always)]
+fn root_path() -> Arc<PathBuf> {
+    Arc::from(PathBuf::from(OsStr::new("/")))
+}
+
+#[inline(always)]
+fn empty_name() -> Arc<OsStr> {
+    Arc::from(OsStr::new(""))
 }
 
 /// Metadata stored for one inode slot.
@@ -190,16 +213,16 @@ struct InodeEntry {
 
 impl InodeEntry {
     /// Returns the parent path and name needed to build an entry path.
-    fn path<'a>(&'a self, table: &'a [InodeEntry]) -> Option<(Arc<PathBuf>, &'a OsStr)> {
+    fn path(&self, table: &[InodeEntry]) -> Option<(Arc<PathBuf>, Arc<OsStr>)> {
         match &self.entry {
             Entry::Vacant => None,
-            Entry::Root => Some((Arc::new(PathBuf::from("/")), OsStr::new(""))),
-            Entry::Folder(folder) => Some((folder.parent_path.clone(), folder.name())),
+            Entry::Root(root_entry) => Some(root_entry.to_pair()),
+            Entry::Folder(folder) => Some((folder.parent_path.clone(), folder.name.clone())),
             Entry::Leaf(leaf) => {
                 let parent_idx = leaf.parent as usize - 1;
                 match &table.get(parent_idx)?.entry {
-                    Entry::Root => Some((Arc::new(PathBuf::from("/")), &leaf.name)),
-                    Entry::Folder(parent) => Some((parent.path(), &leaf.name)),
+                    Entry::Root(root_entry) => Some((root_entry.path.clone(), leaf.name.clone())),
+                    Entry::Folder(parent) => Some((parent.path(), leaf.name.clone())),
                     _ => None,
                 }
             }
@@ -253,13 +276,16 @@ struct InnerInodeTable {
 impl InnerInodeTable {
     /// Creates a table containing only the root inode.
     fn new() -> Self {
-        let root = Arc::new(PathBuf::from("/"));
+        let root = root_path();
         let mut folder_list = BTreeMap::new();
-        folder_list.insert(root, 0);
+        folder_list.insert(root.clone(), 0);
 
         Self {
             table: vec![InodeEntry {
-                entry: Entry::Root,
+                entry: Entry::Root(RootEntry {
+                    path: root,
+                    name: empty_name(),
+                }),
                 linked: true,
                 child_count: 0,
                 lookups: 0,
@@ -272,7 +298,7 @@ impl InnerInodeTable {
     }
 
     /// Builds an owned key for storing in the child index.
-    fn child_key(parent: Inode, name: OsString) -> child_key::ChildKey {
+    fn child_key(parent: Inode, name: Arc<OsStr>) -> child_key::ChildKey {
         child_key::ChildKey::new(parent, name)
     }
 
@@ -300,7 +326,7 @@ impl InnerInodeTable {
     fn live_dir_path(&self, inode: Inode) -> Option<Arc<PathBuf>> {
         let idx = (inode as usize).checked_sub(1)?;
         match &self.table[idx].entry {
-            Entry::Root => Some(Arc::new(PathBuf::from("/"))),
+            Entry::Root(root_entry) => Some(root_entry.path.clone()),
             Entry::Folder(folder) if self.table[idx].linked => Some(folder.path()),
             _ => {
                 error!("inode {inode} is not a live directory!");
@@ -372,19 +398,20 @@ impl InnerInodeTable {
         // A child keeps its parent slot from being freed.
         self.table[parent as usize - 1].child_count += 1;
 
+        let child_name: Arc<OsStr> = Arc::from(name);
         let (inode, generation, folder_path) = {
             let (inode, entry) = Self::get_inode_entry(&mut self.free_list, &mut self.table);
-            let child_name = name.to_os_string();
+
             entry.entry = if is_dir {
                 Entry::Folder(FolderEntry::with_parent(
                     parent,
                     parent_path.clone(),
-                    child_name,
+                    child_name.clone(),
                 ))
             } else {
                 Entry::Leaf(LeafEntry {
                     parent,
-                    name: child_name,
+                    name: child_name.clone(),
                 })
             };
             entry.linked = true;
@@ -400,7 +427,7 @@ impl InnerInodeTable {
 
         let idx = inode as usize - 1;
         self.children
-            .insert(Self::child_key(parent, name.into()), idx);
+            .insert(Self::child_key(parent, child_name), idx);
         if let Some(path) = folder_path {
             self.folder_list.insert(path, idx);
         }
@@ -446,7 +473,6 @@ impl InnerInodeTable {
             }
 
             match &entry.entry {
-                Entry::Vacant | Entry::Root => return,
                 Entry::Folder(folder) => (
                     folder.parent,
                     entry.linked,
@@ -459,6 +485,7 @@ impl InnerInodeTable {
                     Some(Self::child_key_ref(leaf.parent, &leaf.name)),
                     None,
                 ),
+                _ => return,
             }
         };
 
@@ -561,18 +588,15 @@ impl InodeToPath for InodeTable {
             inner
                 .get_entry(inode)?
                 .path(&inner.table)
-                .map(|val| EntryName::new(val.0.into(), val.1.into()))
+                .map(|val| EntryName::new(val.0.into(), val.1))
         })
     }
 
     fn get_folder_path(&self, inode: Inode) -> Option<FolderPath> {
-        self.access_read(|inner| {
-            match &inner.get_entry(inode)?.entry {
-                Entry::Root => Some(Arc::new(PathBuf::from("/"))),
-                Entry::Folder(folder) => Some(folder.path()),
-                _ => None,
-            }
-            .map(|v| v.into())
+        self.access_read(|inner| match &inner.get_entry(inode)?.entry {
+            Entry::Root(root_entry) => Some(root_entry.path.clone().into()),
+            Entry::Folder(folder) => Some(folder.path().into()),
+            _ => None,
         })
     }
 
@@ -627,9 +651,10 @@ impl InodeToPath for InodeTable {
             }
 
             inner.children.remove(&old_key);
+            let newname: Arc<OsStr> = Arc::from(newname);
             inner
                 .children
-                .insert(InnerInodeTable::child_key(newparent, newname.into()), idx);
+                .insert(InnerInodeTable::child_key(newparent, newname.clone()), idx);
 
             if oldparent != newparent {
                 inner.table[oldparent as usize - 1].child_count -= 1;
@@ -640,14 +665,14 @@ impl InodeToPath for InodeTable {
             let mut moved_folder = None;
             match &mut inner.table[idx].entry {
                 Entry::Folder(folder) => {
-                    let new_path = Arc::new(new_parent_path.join(newname));
+                    let new_path = Arc::new(new_parent_path.join(newname.as_ref()));
                     folder.parent = newparent;
                     folder.set_path(new_path.clone());
                     moved_folder = Some((old_folder_path?, new_path));
                 }
                 Entry::Leaf(leaf) => {
                     leaf.parent = newparent;
-                    leaf.name = newname.to_os_string();
+                    leaf.name = newname;
                 }
                 _ => return None, // exit function
             }
