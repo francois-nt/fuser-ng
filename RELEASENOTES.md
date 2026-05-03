@@ -1,3 +1,8 @@
+v0.7.2: 2026-05-03
+  * Share inode-table path components internally with reference-counted entry names.
+  * Avoid repeated root path allocation when resolving the root inode.
+  * Keep the public path API unchanged while reducing internal path/name cloning.
+
 v0.7.1: 2026-05-02
   * Use a dedicated `DOC.md` for the published crates.io and docs.rs package documentation.
   * Include the package documentation as the crate-level rustdoc page.
