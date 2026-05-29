@@ -5,10 +5,11 @@
 `fuser-ng` is a higher-level, path-oriented FUSE filesystem library for Rust,
 built on top of [`fuser`](https://github.com/cberner/fuser) 0.17.
 
-It started as a fork of `fuse-mt`. Version 0.7 updates the crate for `fuser`
+It started as a fork of `fuse-mt`. The 0.7 series moved the crate to `fuser`
 0.17, uses fuser's native threading instead of an internal thread pool, and
 adds a new inode table that keeps descendant paths correct when a parent
-directory is renamed.
+directory is renamed. Version 0.8 refines the public path API for inode-aware
+`getattr` and `create` callbacks.
 
 ## Overview
 
@@ -32,9 +33,13 @@ The crate:
 Filesystem methods receive path-oriented types instead of raw inode numbers:
 
 * `EntryName` is a child name resolved relative to a parent directory. It is
-  used for operations such as `mkdir`, `create`, `unlink`, and `rename`.
-* `ResolvedPath` is an existing entry path with its inode attached. It is used
-  for operations such as `open`, `read`, `write`, and `getattr`.
+  used for operations such as `mkdir`, `mknod`, `symlink`, `unlink`, and
+  `rename`.
+* `ResolvedPath` is an entry path with its inode attached. It is used when
+  `FuserNG` already has an inode for the entry, including operations such as
+  `open`, `read`, `write`, and `create`.
+* `EntryRef` is used by `getattr`, which may run either while resolving a
+  parent/name lookup or after an inode has already been resolved.
 
 The inode table stores complete paths for directories and derives leaf paths
 from their parent directories. This keeps descendants consistent after a
@@ -46,7 +51,7 @@ Add the crate to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-fuser-ng = "0.7"
+fuser-ng = "0.8"
 ```
 
 Implement `fuser_ng::Filesystem`, then wrap it before mounting:
@@ -81,8 +86,9 @@ cargo clippy --workspace --tests
 
 ## Status
 
-This crate is a work in progress. Version 0.7 is a breaking update from the
-old `fuse-mt` API. Bug reports, pull requests, and feedback are welcome.
+This crate is a work in progress. Version 0.8 is a breaking update from 0.7
+for the `Filesystem::getattr` and `Filesystem::create` callback signatures.
+Bug reports, pull requests, and feedback are welcome.
 
 ## License
 

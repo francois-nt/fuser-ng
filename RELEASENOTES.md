@@ -1,3 +1,9 @@
+v0.8.0: 2026-05-29
+  * Breaking change: `Filesystem::getattr` now receives `EntryRef`, allowing implementations to distinguish lookup-time parent/name paths from inode-resolved paths.
+  * Breaking change: `Filesystem::create` now receives `ResolvedPath`, giving target filesystems access to the inode selected for the created file.
+  * Keep FUSE lookup accounting correct when `create` returns an inode that was already known to the inode table.
+  * Roll back only the inode-table reservations made by failed `create` calls.
+
 v0.7.2: 2026-05-03
   * Share inode-table path components internally with reference-counted entry names.
   * Avoid repeated root path allocation when resolving the root inode.
