@@ -153,7 +153,7 @@ impl Filesystem for PassthroughFS {
         debug!("destroy");
     }
 
-    fn getattr(&self, _req: RequestInfo, path: &EntryName, fh: Option<u64>) -> ResultEntry {
+    fn getattr(&self, _req: RequestInfo, path: &EntryRef, fh: Option<u64>) -> ResultEntry {
         debug!("getattr: {:?}", path);
 
         if let Some(fh) = fh {
@@ -699,10 +699,16 @@ impl Filesystem for PassthroughFS {
         }
     }
 
-    fn create(&self, _req: RequestInfo, entry: &EntryName, mode: u32, flags: u32) -> ResultCreate {
-        debug!("create: {:?} (mode={:#o}, flags={:#x})", entry, mode, flags);
+    fn create(
+        &self,
+        _req: RequestInfo,
+        path: &ResolvedPath,
+        mode: u32,
+        flags: u32,
+    ) -> ResultCreate {
+        debug!("create: {:?} (mode={:#o}, flags={:#x})", path, mode, flags);
 
-        let real = PathBuf::from(self.real_path(&entry.full_path()));
+        let real = PathBuf::from(self.real_path(&path.full_path()));
         let fd = unsafe {
             let real_c = CString::from_vec_unchecked(real.clone().into_os_string().into_vec());
             libc::open(

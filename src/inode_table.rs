@@ -17,6 +17,7 @@ pub(crate) trait InodeToPath: std::fmt::Debug {
     fn add_dir(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
     fn add_or_get_leaf(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
     fn add_or_get_dir(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
+    fn create_or_get_leaf(&self, parent: Inode, name: &OsStr) -> Option<(bool, Inode, Generation)>;
     fn forget(&self, inode: Inode, n: LookupCount) -> LookupCount;
     fn get_path(&self, inode: Inode) -> Option<EntryName>;
     fn resolve_from_parent(&self, parent: Inode, name: OsString) -> Option<EntryName> {
@@ -368,7 +369,7 @@ impl InnerInodeTable {
         is_dir: bool,
         initial_lookups: LookupCount,
         allow_existing: bool,
-    ) -> Option<(Inode, Generation)> {
+    ) -> Option<(bool, Inode, Generation)> {
         let key = Self::child_key_ref(parent, name);
 
         if let Some(idx) = self.children.get(&key).copied() {
@@ -385,7 +386,7 @@ impl InnerInodeTable {
             }
 
             if allow_existing {
-                return Some((Self::inode_for_idx(idx), self.table[idx].generation));
+                return Some((false, Self::inode_for_idx(idx), self.table[idx].generation));
             }
             error!(
                 "attempted to insert duplicate child under inode {parent}: {:?}",
@@ -432,7 +433,7 @@ impl InnerInodeTable {
             self.folder_list.insert(path, idx);
         }
 
-        Some((inode, generation))
+        Some((true, inode, generation))
     }
 
     /// Drops live lookup indexes without freeing the inode slot.
@@ -552,19 +553,39 @@ impl InnerInodeTable {
 
 impl InodeToPath for InodeTable {
     fn add_leaf(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)> {
-        self.access_write(|inner| inner.add_child(parent, name, false, 1, false))
+        self.access_write(|inner| {
+            inner
+                .add_child(parent, name, false, 1, false)
+                .map(|(_, inode, generation)| (inode, generation))
+        })
     }
 
     fn add_dir(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)> {
-        self.access_write(|inner| inner.add_child(parent, name, true, 1, false))
+        self.access_write(|inner| {
+            inner
+                .add_child(parent, name, true, 1, false)
+                .map(|(_, inode, generation)| (inode, generation))
+        })
     }
 
     fn add_or_get_leaf(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)> {
-        self.access_write(|inner| inner.add_child(parent, name, false, 0, true))
+        self.access_write(|inner| {
+            inner
+                .add_child(parent, name, false, 0, true)
+                .map(|(_, inode, generation)| (inode, generation))
+        })
+    }
+
+    fn create_or_get_leaf(&self, parent: Inode, name: &OsStr) -> Option<(bool, Inode, Generation)> {
+        self.access_write(|inner| inner.add_child(parent, name, false, 1, true))
     }
 
     fn add_or_get_dir(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)> {
-        self.access_write(|inner| inner.add_child(parent, name, true, 0, true))
+        self.access_write(|inner| {
+            inner
+                .add_child(parent, name, true, 0, true)
+                .map(|(_, inode, generation)| (inode, generation))
+        })
     }
 
     fn forget(&self, inode: Inode, n: LookupCount) -> LookupCount {
@@ -881,6 +902,26 @@ mod tests {
 
         assert_eq!(0, table.forget(inode1, 1));
         assert_eq!(1, table.forget(inode2, 1));
+    }
+
+    #[test]
+    fn create_or_get_leaf_creates_with_lookup_and_reports_existing_without_lookup() {
+        let table = InodeTable::new();
+
+        let (created, inode, generation) = table.create_or_get_leaf(1, name("a")).unwrap();
+        assert!(created);
+        assert_eq!(0, generation);
+        assert_path(&table, inode, "/a");
+        assert_eq!(0, table.forget(inode, 1));
+        assert_no_path(&table, inode);
+
+        let (existing, existing_generation) = table.add_leaf(1, name("b")).unwrap();
+        let (created_again, same, same_generation) =
+            table.create_or_get_leaf(1, name("b")).unwrap();
+        assert!(!created_again);
+        assert_eq!(existing, same);
+        assert_eq!(existing_generation, same_generation);
+        assert_eq!(0, table.forget(existing, 1));
     }
 
     #[test]

@@ -110,6 +110,9 @@ impl<T: Filesystem + Sync + Send + 'static> FuserNG<T> {
     fn add_or_get_leaf(&self, parent: INodeNo, name: &OsStr) -> Option<(u64, u64)> {
         self.table.add_or_get_leaf(parent.0, name)
     }
+    fn create_or_get_leaf(&self, parent: INodeNo, name: &OsStr) -> Option<(bool, u64, u64)> {
+        self.table.create_or_get_leaf(parent.0, name)
+    }
     fn lookup(&self, ino: u64) {
         self.table.lookup(ino);
     }
@@ -190,6 +193,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
     ) {
         let path = resolve_from_parent!(self, parent, name, reply);
         debug!("lookup: {:?}", path);
+        let path = EntryRef::Lookup(path);
         //let parent_path = get_folder_path!(self, parent, reply);
         //debug!("lookup: {:?}, {:?}", parent_path, name);
         //let path = Arc::new((*parent_path).clone().join(name));
@@ -236,8 +240,9 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         fh: Option<fuser::FileHandle>,
         reply: fuser::ReplyAttr,
     ) {
-        let path = get_entry_name!(self, ino, reply);
+        let path = get_resolved_path!(self, ino, reply);
         debug!("getattr: {:?}", path);
+        let path = EntryRef::Resolved(path);
         match self.target.getattr(req.info(), &path, fh.map(|fh| fh.0)) {
             Ok((ttl, attr)) => reply.attr(&ttl, &fuse_fileattr(attr, ino)),
             Err(e) => reply.error(e.into()),
@@ -330,10 +335,8 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
             return;
         }
 
-        match self
-            .target
-            .getattr(req.info(), &path.entry_name(), fh.map(|fh| fh.0))
-        {
+        let path = EntryRef::Resolved(path);
+        match self.target.getattr(req.info(), &path, fh.map(|fh| fh.0)) {
             Ok((ttl, attr)) => reply.attr(&ttl, &fuse_fileattr(attr, ino)),
             Err(e) => reply.error(e.into()),
         }
@@ -899,24 +902,39 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         flags: i32,
         reply: fuser::ReplyCreate,
     ) {
-        let entry = resolve_from_parent!(self, parent, name, reply);
-        debug!("create: {:?} (mode={:#o}, flags={:#x})", entry, mode, flags);
-        match self.target.create(req.info(), &entry, mode, flags as u32) {
-            Ok(create) => {
-                if let Some((ino, generation)) = self.add_leaf(parent, name) {
-                    let attr = fuse_fileattr(create.attr, INodeNo(ino));
-                    reply.created(
-                        &create.ttl,
-                        &attr,
-                        Generation(generation),
-                        FileHandle(create.fh),
-                        FopenFlags::from_bits_retain(create.flags),
-                    );
-                } else {
-                    reply.error(Errno::EINVAL);
-                }
+        let (created, path, generation) = match self.create_or_get_leaf(parent, name) {
+            Some((created, ino, generation)) => (
+                created,
+                get_resolved_path!(self, INodeNo(ino), reply),
+                generation,
+            ),
+            _ => {
+                reply.error(Errno::EINVAL);
+                return;
             }
-            Err(e) => reply.error(e.into()),
+        };
+        debug!("create: {:?} (mode={:#o}, flags={:#x})", path, mode, flags);
+        match self.target.create(req.info(), &path, mode, flags as u32) {
+            Ok(create) => {
+                if !created {
+                    self.lookup(path.ino());
+                }
+                let attr = fuse_fileattr(create.attr, INodeNo(path.ino()));
+                reply.created(
+                    &create.ttl,
+                    &attr,
+                    Generation(generation),
+                    FileHandle(create.fh),
+                    FopenFlags::from_bits_retain(create.flags),
+                );
+            }
+            Err(e) => {
+                if created {
+                    self.inode_unlink(parent, name);
+                    self.forget(INodeNo(path.ino()), 1);
+                }
+                reply.error(e.into())
+            }
         }
     }
 

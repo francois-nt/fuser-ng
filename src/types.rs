@@ -165,13 +165,6 @@ impl ResolvedPath {
     pub fn parent_path(&self) -> Arc<PathBuf> {
         self.parent.clone()
     }
-    /// Returns the same path without the inode context.
-    pub fn entry_name(&self) -> EntryName {
-        EntryName {
-            parent: self.parent.clone(),
-            name: self.name.clone(),
-        }
-    }
 }
 
 /// Entry name resolved relative to a parent directory path.
@@ -213,6 +206,40 @@ impl EntryName {
     }
 }
 
+/// Entry path passed to callbacks that may run before or after inode resolution.
+///
+/// Lookup is used while resolving a parent/name pair before an inode is attached.
+/// Resolved is used when the inode table already has an inode for the entry.
+#[derive(Debug)]
+pub enum EntryRef {
+    Lookup(EntryName),
+    Resolved(ResolvedPath),
+}
+
+impl EntryRef {
+    /// Returns the full path by joining the parent path and entry name.
+    pub fn full_path(&self) -> PathBuf {
+        match self {
+            EntryRef::Lookup(this) => this.full_path(),
+            EntryRef::Resolved(this) => this.full_path(),
+        }
+    }
+    /// Returns the final path component.
+    pub fn name(&self) -> &OsStr {
+        match self {
+            EntryRef::Lookup(this) => this.name(),
+            EntryRef::Resolved(this) => this.name(),
+        }
+    }
+    /// Returns the parent directory path.
+    pub fn parent_path(&self) -> Arc<PathBuf> {
+        match self {
+            EntryRef::Lookup(this) => this.parent_path(),
+            EntryRef::Resolved(this) => this.parent_path(),
+        }
+    }
+}
+
 /// Shared path for a directory entry in the inode table.
 #[repr(transparent)]
 #[derive(Debug)]
@@ -250,12 +277,12 @@ fn enosys_error<T>() -> std::io::Result<T> {
 /// use std::io;
 /// use std::time::{Duration, SystemTime};
 ///
-/// use fuser_ng::{EntryName, FileAttr, FileType, Filesystem, RequestInfo, ResultEntry};
+/// use fuser_ng::{EntryRef, FileAttr, FileType, Filesystem, RequestInfo, ResultEntry};
 ///
 /// struct RootOnly;
 ///
 /// impl Filesystem for RootOnly {
-///     fn getattr(&self, _req: RequestInfo, path: &EntryName, _fh: Option<u64>) -> ResultEntry {
+///     fn getattr(&self, _req: RequestInfo, path: &EntryRef, _fh: Option<u64>) -> ResultEntry {
 ///         if path.full_path() != std::path::Path::new("/") {
 ///             return Err(io::Error::from_raw_os_error(libc::ENOENT));
 ///         }
@@ -299,7 +326,7 @@ pub trait Filesystem {
     /// Get the attributes of a filesystem entry.
     ///
     /// * `fh`: a file handle if this is called on an open file.
-    fn getattr(&self, req: RequestInfo, path: &EntryName, fh: Option<u64>) -> ResultEntry {
+    fn getattr(&self, req: RequestInfo, path: &EntryRef, fh: Option<u64>) -> ResultEntry {
         enosys_error()
     }
 
@@ -706,7 +733,7 @@ pub trait Filesystem {
     ///
     /// Return a `CreatedEntry` (which contains the new file's attributes as well as a file handle
     /// -- see documentation on `open` for more info on that).
-    fn create(&self, req: RequestInfo, entry: &EntryName, mode: u32, flags: u32) -> ResultCreate {
+    fn create(&self, req: RequestInfo, path: &ResolvedPath, mode: u32, flags: u32) -> ResultCreate {
         enosys_error()
     }
 
