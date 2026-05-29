@@ -39,6 +39,9 @@ Filesystem methods receive path-oriented types instead of raw inode numbers:
 * `EntryRef` is used by `getattr`, which may run either while resolving a
   parent/name lookup or after an inode has already been resolved.
 
+These path wrapper types implement `Clone`. Cloning them is cheap because the
+stored path components are shared internally.
+
 The inode table stores complete paths for directories and derives leaf paths
 from their parent directories. This keeps descendants consistent after a
 directory subtree is renamed.

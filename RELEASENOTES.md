@@ -1,3 +1,8 @@
+v0.8.1: 2026-05-29
+  * Add `Clone` implementations for `EntryName`, `ResolvedPath`, and `EntryRef`.
+  * Make it easier for filesystem implementations to build an owned `EntryRef` from a borrowed path value.
+  * No behavior changes.
+
 v0.8.0: 2026-05-29
   * Breaking change: `Filesystem::getattr` now receives `EntryRef`, allowing implementations to distinguish lookup-time parent/name paths from inode-resolved paths.
   * Breaking change: `Filesystem::create` now receives `ResolvedPath`, giving target filesystems access to the inode selected for the created file.

@@ -141,7 +141,7 @@ pub struct CallbackResult {
 }
 
 /// Path resolved from an inode with the current inode number attached.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResolvedPath {
     parent: Arc<PathBuf>,
     name: Arc<OsStr>,
@@ -168,7 +168,7 @@ impl ResolvedPath {
 }
 
 /// Entry name resolved relative to a parent directory path.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EntryName {
     parent: Arc<PathBuf>,
     //parent_ino: Inode,
@@ -210,7 +210,7 @@ impl EntryName {
 ///
 /// Lookup is used while resolving a parent/name pair before an inode is attached.
 /// Resolved is used when the inode table already has an inode for the entry.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum EntryRef {
     Lookup(EntryName),
     Resolved(ResolvedPath),
