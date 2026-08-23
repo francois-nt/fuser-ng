@@ -665,7 +665,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
             match self.get_parent_inode(ino) {
                 Some(inode) => INodeNo(inode),
                 None => {
-                    error!("readdir: unable to get parent inode for {:?}", &path);
+                    error!("readdir: unable to get parent inode for {:?}", path);
                     reply.error(Errno::EIO);
                     return;
                 }

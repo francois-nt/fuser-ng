@@ -13,17 +13,22 @@ env:
 
 jobs:
   checks:
-    name: Cargo checks (${{ matrix.rust_toolchain }})
+    name: Cargo checks (${{ matrix.rust_toolchain }}, ${{ matrix.configuration }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         rust_toolchain: [stable, nightly]
+        configuration: [default, async]
         include:
           - rust_toolchain: stable
             deny_warnings: --deny warnings
           - rust_toolchain: nightly
             deny_warnings:
+          - configuration: default
+            cargo_features: --no-default-features
+          - configuration: async
+            cargo_features: --no-default-features --features fuser-ng/async,passthrufs/async
     steps:
       - name: Checkout sources
         uses: actions/checkout@v6
@@ -43,10 +48,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets -- ${{matrix.deny_warnings}}
+        run: cargo clippy --workspace --all-targets ${{matrix.cargo_features}} -- ${{matrix.deny_warnings}}
 
       - name: Run cargo test
-        run: cargo test --workspace
+        run: cargo test --workspace ${{matrix.cargo_features}}
 
       - name: Run doctests
-        run: cargo test --doc
+        run: cargo test --doc ${{matrix.cargo_features}}

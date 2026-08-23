@@ -18,11 +18,19 @@
 
 #[macro_use]
 extern crate log;
+#[cfg(feature = "async")]
+mod r#async;
 mod directory_cache;
 mod fuserng;
 mod inode_table;
 mod types;
-
+#[cfg(feature = "async")]
+pub use r#async::{AsyncFilesystem, AsyncFuserNG};
+#[cfg(feature = "async")]
+pub mod asynchronous {
+    pub use crate::AsyncFilesystem as Filesystem;
+    pub use crate::AsyncFuserNG as FuserNG;
+}
 pub use crate::fuserng::*;
 pub use crate::types::*;
 pub use fuser::FileType;

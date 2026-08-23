@@ -19,6 +19,10 @@ use crate::libc_wrappers;
 
 use fuser_ng::*;
 
+#[cfg(feature = "async")]
+mod async_impl;
+
+#[derive(Clone)]
 pub struct PassthroughFS {
     pub target: OsString,
 }
@@ -118,6 +122,31 @@ impl PassthroughFS {
                 Err(err)
             }
         }
+    }
+
+    /// Reads owned data from an open file handle.
+    fn read_data(&self, path: &ResolvedPath, fh: u64, offset: u64, size: u32) -> ResultData {
+        let path = path.full_path();
+        debug!("read: {:?} {:#x} @ {:#x}", path, size, offset);
+        let mut file = unsafe { UnmanagedFile::new(fh) };
+
+        let mut data = Vec::<u8>::with_capacity(size as usize);
+
+        if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+            error!("seek({:?}, {}): {}", path, offset, e);
+            return Err(e);
+        }
+        match file.read(unsafe {
+            mem::transmute::<&mut [std::mem::MaybeUninit<u8>], &mut [u8]>(data.spare_capacity_mut())
+        }) {
+            Ok(n) => unsafe { data.set_len(n) },
+            Err(e) => {
+                error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
+                return Err(e);
+            }
+        }
+
+        Ok(data)
     }
 }
 
@@ -286,29 +315,10 @@ impl Filesystem for PassthroughFS {
         size: u32,
         callback: impl FnOnce(ResultSlice<'_>) -> CallbackResult,
     ) -> CallbackResult {
-        let path = path.full_path();
-        debug!("read: {:?} {:#x} @ {:#x}", path, size, offset);
-        let mut file = unsafe { UnmanagedFile::new(fh) };
-
-        let mut data = Vec::<u8>::with_capacity(size as usize);
-
-        if let Err(e) = file.seek(SeekFrom::Start(offset)) {
-            error!("seek({:?}, {}): {}", path, offset, e);
-            return callback(Err(e));
+        match self.read_data(path, fh, offset, size) {
+            Ok(data) => callback(Ok(&data)),
+            Err(error) => callback(Err(error)),
         }
-        match file.read(unsafe {
-            mem::transmute::<&mut [std::mem::MaybeUninit<u8>], &mut [u8]>(data.spare_capacity_mut())
-        }) {
-            Ok(n) => {
-                unsafe { data.set_len(n) };
-            }
-            Err(e) => {
-                error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
-                return callback(Err(e));
-            }
-        }
-
-        callback(Ok(&data))
     }
 
     fn write(

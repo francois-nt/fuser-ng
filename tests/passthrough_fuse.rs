@@ -82,10 +82,20 @@ impl Drop for PassthroughProcess {
     }
 }
 
-fn start_passthrough(backing: &Path, mountpoint: &Path) -> io::Result<PassthroughProcess> {
+fn start_passthrough(
+    backing: &Path,
+    mountpoint: &Path,
+    binary: &str,
+    features: Option<&str>,
+) -> io::Result<PassthroughProcess> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let child = Command::new(cargo)
-        .args(["run", "--quiet", "-p", "passthrufs", "--"])
+    let mut command = Command::new(cargo);
+    command.args(["run", "--quiet", "-p", "passthrufs", "--bin", binary]);
+    if let Some(features) = features {
+        command.args(["--features", features]);
+    }
+    let child = command
+        .arg("--")
         .arg(backing)
         .arg(mountpoint)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -333,15 +343,14 @@ fn check_xattrs(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-#[test]
-fn passthrough_exercises_fuse_methods() -> io::Result<()> {
+fn exercise_passthrough(binary: &str, features: Option<&str>) -> io::Result<()> {
     let backing = TempDir::new("backing")?;
     let mount = TempDir::new("mount")?;
 
     fs::create_dir(backing.path().join("existing"))?;
     fs::write(backing.path().join("existing/source.txt"), b"initial")?;
 
-    let _process = start_passthrough(backing.path(), mount.path())?;
+    let _process = start_passthrough(backing.path(), mount.path(), binary, features)?;
     let root = mount.path();
 
     assert!(fs::metadata(root)?.is_dir());
@@ -534,4 +543,15 @@ fn passthrough_exercises_fuse_methods() -> io::Result<()> {
     fs::remove_dir(&work)?;
 
     Ok(())
+}
+
+#[test]
+fn passthrough_exercises_fuse_methods() -> io::Result<()> {
+    exercise_passthrough("passthrufs", None)
+}
+
+#[cfg(feature = "async")]
+#[test]
+fn async_passthrough_exercises_fuse_methods() -> io::Result<()> {
+    exercise_passthrough("async-passthrough", Some("passthrufs/async"))
 }

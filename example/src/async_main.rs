@@ -1,7 +1,4 @@
-// Main Entry Point :: A fuser_ng test program.
-//
-// Copyright (c) 2016-2022 by William R. Fraser, 2026 by François NT
-//
+// Async entry point for the passthrough example.
 
 use std::env;
 use std::ffi::OsString;
@@ -43,16 +40,19 @@ fn main() {
         std::process::exit(-1);
     }
 
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     let filesystem = passthrough::PassthroughFS {
         target: args[1].clone(),
     };
-
-    let fuse_args = [fuser_ng::MountOption::FSName("passthrufs".into())];
+    let fuse_args = [fuser_ng::MountOption::FSName("async-passthrough".into())];
 
     fuser_ng::mount(
-        fuser_ng::FuserNG::new(filesystem),
+        fuser_ng::AsyncFuserNG::new(filesystem, runtime.handle().clone()),
         &args[2],
-        &fuse_args[..],
+        &fuse_args,
         1.into(),
     )
     .unwrap();

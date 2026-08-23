@@ -7,7 +7,8 @@ It started as a fork of `fuse-mt`. The 0.7 series moved the crate to `fuser`
 0.17, uses fuser's native threading instead of an internal thread pool, and
 adds a new inode table that keeps descendant paths correct when a parent
 directory is renamed. Version 0.8 refines the public path API for inode-aware
-`getattr` and `create` callbacks.
+`getattr` and `create` callbacks and adds an optional asynchronous filesystem
+interface.
 
 ## Overview
 
@@ -23,6 +24,8 @@ The crate:
 * provides default `ENOSYS` implementations for operations you do not support;
 * simplifies `readdir` by handling FUSE pagination internally;
 * uses fuser's threaded event loop, configurable with `ThreadCount`;
+* optionally adapts futures returned by `AsyncFilesystem` through a caller-owned
+  Tokio runtime;
 * adds broader unit and integration test coverage than the original `fuse-mt`
   codebase, including inode-table rename cases and passthrough FUSE operations.
 
@@ -67,3 +70,43 @@ fuser_ng::mount(
     fuser_ng::ThreadCount::Default,
 )?;
 ```
+
+## Asynchronous filesystems
+
+Asynchronous support is opt-in. Enable the `async` feature and provide Tokio
+with a multithreaded runtime:
+
+```toml
+[dependencies]
+fuser-ng = { version = "0.8.2", features = ["async"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+```
+
+Implement `fuser_ng::AsyncFilesystem`, then pass a cloned runtime handle to the
+adapter:
+
+```rust,ignore
+let runtime = tokio::runtime::Builder::new_multi_thread()
+    .enable_all()
+    .build()?;
+let options = [fuser_ng::MountOption::FSName("my-async-fs".into())];
+
+fuser_ng::mount(
+    fuser_ng::AsyncFuserNG::new(filesystem, runtime.handle().clone()),
+    mountpoint,
+    &options,
+    fuser_ng::ThreadCount::Default,
+)?;
+```
+
+The asynchronous trait receives owned path and data arguments and returns
+`Send` futures. `init` and `destroy` remain synchronous because they are
+lifecycle callbacks.
+
+`AsyncFuserNG` only stores the Tokio `Handle`; it does not own or shut down the
+runtime. The caller must keep the runtime alive while the filesystem is
+mounted and decides how outstanding tasks are handled during shutdown.
+`destroy` is forwarded directly to the target filesystem.
+
+The same APIs are also available as `fuser_ng::asynchronous::Filesystem` and
+`fuser_ng::asynchronous::FuserNG`.

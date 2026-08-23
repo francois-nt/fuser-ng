@@ -1,3 +1,10 @@
+v0.8.2: 2026-08-23
+  * Add the optional `async` feature with the `AsyncFilesystem` trait and `AsyncFuserNG` adapter.
+  * Dispatch asynchronous filesystem operations on a caller-provided Tokio runtime handle.
+  * Forward `destroy` to the target filesystem without managing runtime shutdown or task cancellation.
+  * Add an async passthrough example and run the FUSE integration suite in synchronous and asynchronous configurations.
+  * Keep the existing synchronous API and default dependency set unchanged.
+
 v0.8.1: 2026-05-29
   * Add `Clone` implementations for `EntryName`, `ResolvedPath`, and `EntryRef`.
   * Make it easier for filesystem implementations to build an owned `EntryRef` from a borrowed path value.

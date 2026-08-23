@@ -9,3 +9,13 @@ workspace = ".."
 libc = "0.2"
 log = "0.4"
 fuser-ng = { path = ".." }
+tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+
+[features]
+default = []
+async = ["fuser-ng/async", "dep:tokio"]
+
+[[bin]]
+name = "async-passthrough"
+path = "src/async_main.rs"
+required-features = ["async"]

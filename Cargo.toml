@@ -1,11 +1,11 @@
 [package]
 name = "fuser-ng"
-version = "0.8.1"
+version = "0.8.2"
 authors = ["William R. Fraser <wfraser@codewise.org>", "François NT <francois@iobuffer.me>"]
 repository = "https://github.com/francois-nt/fuser-ng"
-description = "A higher-level FUSE filesystem library with inode->path translation."
-categories = ["filesystem", "os::unix-apis"]
-keywords = ["fuse", "fuser", "filesystem", "mount", "userspace"]
+description = "A higher-level path-oriented FUSE filesystem library with optional async support."
+categories = ["filesystem", "asynchronous", "os::unix-apis"]
+keywords = ["fuse", "fuser", "filesystem", "async", "userspace"]
 license = "MIT OR Apache-2.0"
 readme = "DOC.md"
 edition = "2024"
@@ -24,6 +24,11 @@ fuser = "0.17"
 libc = "0.2"
 log = "0.4"
 parking_lot = "0.12.5"
+tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+
+[features]
+default = []
+async = ["dep:tokio"]
 
 [workspace]
 members = [".", "example"]
