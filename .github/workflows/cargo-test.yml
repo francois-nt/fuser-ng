@@ -54,4 +54,4 @@ jobs:
         run: cargo test --workspace ${{matrix.cargo_features}}
 
       - name: Run doctests
-        run: cargo test --doc ${{matrix.cargo_features}}
+        run: cargo test --doc --workspace ${{matrix.cargo_features}}
