@@ -20,7 +20,7 @@ include = [
 ]
 
 [dependencies]
-fuser = "0.17"
+fuser = "0.18"
 libc = "0.2"
 log = "0.4"
 parking_lot = "0.12.5"

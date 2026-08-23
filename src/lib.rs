@@ -83,7 +83,7 @@ pub fn mount<FS: fuser::Filesystem, P: AsRef<Path>>(
     if num_threads > 0 {
         config.n_threads = Some(num_threads);
     }
-    fuser::mount2(fs, mountpoint, &config)
+    fuser::mount(fs, mountpoint, &config)
 }
 
 /// Mount the given filesystem to the given mountpoint. This function spawns a background thread to
@@ -103,5 +103,5 @@ pub fn spawn_mount<FS: fuser::Filesystem + Send + 'static, P: AsRef<Path>>(
     if num_threads > 0 {
         config.n_threads = Some(num_threads);
     }
-    fuser::spawn_mount2(fs, mountpoint, &config)
+    fuser::spawn_mount(fs, mountpoint, &config)
 }
