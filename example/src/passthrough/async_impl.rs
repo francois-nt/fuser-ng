@@ -1,5 +1,22 @@
 use super::*;
 use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+type ReaddirPlusItem = io::Result<Vec<DirectoryEntryPlus>>;
+
+/// Streams batches produced by a blocking directory reader.
+struct ReaddirPlusReceiver {
+    receiver: tokio::sync::mpsc::Receiver<ReaddirPlusItem>,
+}
+
+impl Stream for ReaddirPlusReceiver {
+    type Item = ReaddirPlusItem;
+
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.receiver.poll_recv(context)
+    }
+}
 
 /// Runs a blocking passthrough operation outside Tokio worker threads.
 async fn run_blocking<T, F>(operation: F) -> io::Result<T>
@@ -200,6 +217,24 @@ impl AsyncFilesystem for PassthroughFS {
         readdir(req: RequestInfo, path: ResolvedPath, fh: u64)
         -> ResultReaddir => |filesystem| Filesystem::readdir(&filesystem, req, &path, fh)
     );
+
+    fn readdirplus(
+        &self,
+        req: RequestInfo,
+        path: ResolvedPath,
+        fh: u64,
+    ) -> impl Stream<Item = ReaddirPlusItem> + Send + 'static {
+        let filesystem = self.clone();
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        tokio::task::spawn_blocking(move || {
+            for entries in Filesystem::readdirplus(&filesystem, req, &path, fh) {
+                if sender.blocking_send(entries).is_err() {
+                    break;
+                }
+            }
+        });
+        ReaddirPlusReceiver { receiver }
+    }
 
     forward_operation!(
         releasedir(req: RequestInfo, path: ResolvedPath, fh: u64, flags: u32)

@@ -3,15 +3,31 @@
 use std::ffi::OsString;
 use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::SystemTime;
 
+use futures_core::Stream;
+
 use crate::{
-    EntryName, EntryRef, KernelConfig, RequestInfo, ResolvedPath, ResultCreate, ResultData,
-    ResultEmpty, ResultEntry, ResultOpen, ResultReaddir, ResultStatfs, ResultWrite, ResultXattr,
+    DirectoryEntryPlus, EntryName, EntryRef, KernelConfig, RequestInfo, ResolvedPath, ResultCreate,
+    ResultData, ResultEmpty, ResultEntry, ResultOpen, ResultReaddir, ResultStatfs, ResultWrite,
+    ResultXattr,
 };
 
 #[cfg(target_os = "macos")]
 use crate::ResultXTimes;
+
+/// A stream that yields one value.
+struct Once<T>(Option<T>);
+
+impl<T: Unpin> Stream for Once<T> {
+    type Item = T;
+
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Ready(self.0.take())
+    }
+}
 
 /// Filesystem operations that may complete asynchronously.
 ///
@@ -215,6 +231,18 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         path: ResolvedPath,
         fh: u64,
     ) -> impl Future<Output = ResultReaddir> + Send;
+
+    /// Gets directory entries and attributes as an asynchronous stream of batches.
+    ///
+    /// The target filesystem must request the desired READDIRPLUS capability during init.
+    fn readdirplus(
+        &self,
+        _req: RequestInfo,
+        _path: ResolvedPath,
+        _fh: u64,
+    ) -> impl Stream<Item = std::io::Result<Vec<DirectoryEntryPlus>>> + Send + 'static {
+        Once(Some(Err(std::io::Error::from_raw_os_error(libc::ENOSYS))))
+    }
 
     /// Releases an open directory.
     fn releasedir(

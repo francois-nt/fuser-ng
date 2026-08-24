@@ -349,6 +349,14 @@ fn exercise_passthrough(binary: &str, features: Option<&str>) -> io::Result<()> 
 
     fs::create_dir(backing.path().join("existing"))?;
     fs::write(backing.path().join("existing/source.txt"), b"initial")?;
+    let listing = backing.path().join("listing");
+    fs::create_dir(&listing)?;
+    let expected_listing: Vec<OsString> = (0..256)
+        .map(|index| OsString::from(format!("entry-{index:03}.txt")))
+        .collect();
+    for name in &expected_listing {
+        fs::write(listing.join(name), b"entry")?;
+    }
 
     let _process = start_passthrough(backing.path(), mount.path(), binary, features)?;
     let root = mount.path();
@@ -363,6 +371,21 @@ fn exercise_passthrough(binary: &str, features: Option<&str>) -> io::Result<()> 
 
     let entries = read_dir_names(root)?;
     assert!(entries.iter().any(|name| name == OsStr::new("existing")));
+
+    let mut listed_entries = fs::read_dir(root.join("listing"))?
+        .map(|entry| {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                return Err(io::Error::other(format!(
+                    "unexpected non-file directory entry: {:?}",
+                    entry.path()
+                )));
+            }
+            Ok(entry.file_name())
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    listed_entries.sort();
+    assert_eq!(expected_listing, listed_entries);
 
     let work = root.join("work");
     fs::create_dir(&work)?;
@@ -546,12 +569,26 @@ fn exercise_passthrough(binary: &str, features: Option<&str>) -> io::Result<()> 
 }
 
 #[test]
-fn passthrough_exercises_fuse_methods() -> io::Result<()> {
+fn passthrough_exercises_fuse_methods_with_readdir() -> io::Result<()> {
     exercise_passthrough("passthrufs", None)
+}
+
+#[test]
+fn passthrough_exercises_fuse_methods_with_readdirplus() -> io::Result<()> {
+    exercise_passthrough("passthrufs", Some("passthrufs/readdirplus"))
 }
 
 #[cfg(feature = "async")]
 #[test]
-fn async_passthrough_exercises_fuse_methods() -> io::Result<()> {
+fn async_passthrough_exercises_fuse_methods_with_readdir() -> io::Result<()> {
     exercise_passthrough("async-passthrough", Some("passthrufs/async"))
+}
+
+#[cfg(feature = "async")]
+#[test]
+fn async_passthrough_exercises_fuse_methods_with_readdirplus() -> io::Result<()> {
+    exercise_passthrough(
+        "async-passthrough",
+        Some("passthrufs/async,passthrufs/readdirplus"),
+    )
 }

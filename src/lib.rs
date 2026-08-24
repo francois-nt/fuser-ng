@@ -27,6 +27,8 @@ mod types;
 #[cfg(feature = "async")]
 pub use r#async::{AsyncFilesystem, AsyncFuserNG};
 #[cfg(feature = "async")]
+pub use futures_core::Stream;
+#[cfg(feature = "async")]
 pub mod asynchronous {
     pub use crate::AsyncFilesystem as Filesystem;
     pub use crate::AsyncFuserNG as FuserNG;
@@ -34,6 +36,7 @@ pub mod asynchronous {
 pub use crate::fuserng::*;
 pub use crate::types::*;
 pub use fuser::FileType;
+pub use fuser::InitFlags;
 pub use fuser::KernelConfig;
 pub use fuser::MountOption;
 // Forward to similarly-named fuser functions to work around deprecation for now.

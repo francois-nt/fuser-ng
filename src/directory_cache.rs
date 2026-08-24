@@ -5,8 +5,11 @@
 
 use std::collections::HashMap;
 use std::num::Wrapping;
+use std::sync::Arc;
 
-use super::DirectoryEntry;
+use fuser::Errno;
+
+use super::{DirectoryEntry, DirectoryEntryPlus};
 
 /// Directory entry cache.
 ///
@@ -80,5 +83,81 @@ pub struct DirectoryCacheEntry {
 impl DirectoryCacheEntry {
     pub fn new(fh: u64) -> DirectoryCacheEntry {
         DirectoryCacheEntry { fh, entries: None }
+    }
+}
+
+/// State retained while serving readdirplus requests for one directory handle.
+pub struct ReaddirPlusState<P> {
+    pub entries: Vec<DirectoryEntryPlus>,
+    pub producer: Option<P>,
+    pub pending_error: Option<Errno>,
+}
+
+impl<P> ReaddirPlusState<P> {
+    /// Creates an empty history backed by a live producer.
+    pub fn new(producer: P) -> Self {
+        Self {
+            entries: Vec::new(),
+            producer: Some(producer),
+            pending_error: None,
+        }
+    }
+}
+
+impl<P> std::fmt::Debug for ReaddirPlusState<P> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ReaddirPlusState")
+            .field("entries", &self.entries)
+            .field("producer_active", &self.producer.is_some())
+            .field("pending_error", &self.pending_error)
+            .finish()
+    }
+}
+
+/// Per-handle readdirplus state indexed by the synthetic FUSE handle.
+#[derive(Debug)]
+pub struct ReaddirPlusCache<S> {
+    entries: HashMap<u64, Arc<S>>,
+}
+
+impl<S> ReaddirPlusCache<S> {
+    /// Creates an empty cache.
+    pub fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+        }
+    }
+
+    /// Associates a newly opened directory handle with an empty state slot.
+    pub fn insert(&mut self, key: u64, slot: S) {
+        self.entries.insert(key, Arc::new(slot));
+    }
+
+    /// Returns the state slot for an open directory handle.
+    pub fn get(&self, key: u64) -> Option<Arc<S>> {
+        self.entries.get(&key).cloned()
+    }
+
+    /// Removes state associated with a released directory handle.
+    pub fn delete(&mut self, key: u64) {
+        self.entries.remove(&key);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DirectoryCache;
+
+    #[test]
+    fn duplicate_target_handles_receive_distinct_cache_keys() {
+        let mut cache = DirectoryCache::new();
+
+        let first = cache.new_entry(0);
+        let second = cache.new_entry(0);
+
+        assert_ne!(first, second);
+        assert_eq!(cache.real_fh(first), 0);
+        assert_eq!(cache.real_fh(second), 0);
     }
 }

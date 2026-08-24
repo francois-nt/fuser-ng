@@ -34,6 +34,17 @@ pub struct DirectoryEntry {
     pub kind: crate::FileType,
 }
 
+/// A directory entry returned by readdirplus.
+#[derive(Clone, Debug)]
+pub struct DirectoryEntryPlus {
+    /// Name of the entry.
+    pub name: OsString,
+    /// Cache time-to-live for the entry and its attributes.
+    pub ttl: Duration,
+    /// Attributes of the entry.
+    pub attr: FileAttr,
+}
+
 /// Filesystem statistics.
 #[derive(Clone, Copy, Debug)]
 pub struct Statfs {
@@ -614,6 +625,21 @@ pub trait Filesystem {
     /// Return all the entries of the directory.
     fn readdir(&self, req: RequestInfo, path: &ResolvedPath, fh: u64) -> ResultReaddir {
         enosys_error()
+    }
+
+    /// Gets directory entries together with their attributes.
+    ///
+    /// Results are produced in batches and retained by FuserNG until releasedir, allowing
+    /// offsets previously returned to FUSE to be revisited.
+    ///
+    /// The target filesystem must request the desired READDIRPLUS capability during init.
+    fn readdirplus(
+        &self,
+        req: RequestInfo,
+        path: &ResolvedPath,
+        fh: u64,
+    ) -> impl Iterator<Item = std::io::Result<Vec<DirectoryEntryPlus>>> + Send + 'static {
+        std::iter::once(enosys_error())
     }
 
     /// Close an open directory.

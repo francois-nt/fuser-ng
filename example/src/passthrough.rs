@@ -171,10 +171,21 @@ impl<T> ToIoResult<T> for Result<T, libc::c_int> {
 }
 
 const TTL: Duration = Duration::from_secs(1);
+const READDIRPLUS_BATCH_SIZE: usize = 128;
 
 impl Filesystem for PassthroughFS {
-    fn init(&self, _req: RequestInfo, _config: &mut KernelConfig) -> ResultEmpty {
+    fn init(&self, _req: RequestInfo, config: &mut KernelConfig) -> ResultEmpty {
         debug!("init");
+        #[cfg(feature = "readdirplus")]
+        config
+            .add_capabilities(InitFlags::FUSE_DO_READDIRPLUS)
+            .map_err(|unsupported| {
+                io::Error::other(format!(
+                    "kernel does not support required capabilities: {unsupported:?}"
+                ))
+            })?;
+        #[cfg(not(feature = "readdirplus"))]
+        let _ = config;
         Ok(())
     }
 
@@ -278,6 +289,82 @@ impl Filesystem for PassthroughFS {
         }
 
         Ok(entries)
+    }
+
+    fn readdirplus(
+        &self,
+        _req: RequestInfo,
+        path: &ResolvedPath,
+        fh: u64,
+    ) -> impl Iterator<Item = io::Result<Vec<DirectoryEntryPlus>>> + Send + 'static {
+        debug!("readdirplus: {:?}", path);
+        let filesystem = self.clone();
+        let path = path.full_path();
+        let mut finished = false;
+        let mut pending_error = (fh == 0).then(|| {
+            error!("readdirplus: missing fh");
+            libc::EINVAL.io_error()
+        });
+
+        std::iter::from_fn(move || {
+            if let Some(error) = pending_error.take() {
+                finished = true;
+                return Some(Err(error));
+            }
+            if finished {
+                return None;
+            }
+
+            let mut entries = Vec::with_capacity(READDIRPLUS_BATCH_SIZE);
+            while entries.len() < READDIRPLUS_BATCH_SIZE {
+                let entry = match libc_wrappers::readdir(fh) {
+                    Ok(Some(entry)) => entry,
+                    Ok(None) => {
+                        finished = true;
+                        break;
+                    }
+                    Err(errno) => {
+                        let error = errno.io_error();
+                        error!("readdirplus: {:?}: {}", path, error);
+                        if entries.is_empty() {
+                            finished = true;
+                            return Some(Err(error));
+                        }
+                        pending_error = Some(error);
+                        break;
+                    }
+                };
+
+                let name_c = unsafe { CStr::from_ptr(entry.d_name.as_ptr()) };
+                let name = OsStr::from_bytes(name_c.to_bytes()).to_owned();
+                let entry_path = if name == OsStr::new(".") {
+                    path.clone()
+                } else if name == OsStr::new("..") {
+                    path.parent().unwrap_or(Path::new("/")).to_path_buf()
+                } else {
+                    path.join(&name)
+                };
+                let attr = match filesystem.stat_real(&entry_path) {
+                    Ok(attr) => attr,
+                    Err(error) if entries.is_empty() => {
+                        finished = true;
+                        return Some(Err(error));
+                    }
+                    Err(error) => {
+                        pending_error = Some(error);
+                        break;
+                    }
+                };
+
+                entries.push(DirectoryEntryPlus {
+                    name,
+                    ttl: TTL,
+                    attr,
+                });
+            }
+
+            (!entries.is_empty()).then_some(Ok(entries))
+        })
     }
 
     fn open(&self, _req: RequestInfo, path: &ResolvedPath, flags: u32) -> ResultOpen {

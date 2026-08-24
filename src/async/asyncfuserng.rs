@@ -1,6 +1,7 @@
 use std::ffi::{OsStr, OsString};
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
@@ -8,12 +9,17 @@ use fuser::{
     AccessFlags, Errno, FileHandle, FopenFlags, Generation, INodeNo, LockOwner, OpenFlags,
     RenameFlags, TimeOrNow, WriteFlags,
 };
+use futures_core::Stream;
 
 use super::AsyncFilesystem;
 use crate::FileType;
-use crate::directory_cache::DirectoryCache;
+use crate::directory_cache::{DirectoryCache, ReaddirPlusCache, ReaddirPlusState};
 use crate::inode_table::{InodeTable, InodeToPath};
 use crate::types::*;
+
+type ReaddirPlusStream =
+    Pin<Box<dyn Stream<Item = std::io::Result<Vec<DirectoryEntryPlus>>> + Send>>;
+type ReaddirPlusSlot = tokio::sync::Mutex<Option<ReaddirPlusState<ReaddirPlusStream>>>;
 
 trait IntoRequestInfo {
     fn info(&self) -> RequestInfo;
@@ -70,6 +76,7 @@ struct AsyncFuserNGInner<T> {
     target: T,
     table: InodeTable,
     directory_cache: RwLock<DirectoryCache>,
+    readdirplus_cache: RwLock<ReaddirPlusCache<ReaddirPlusSlot>>,
 }
 
 impl<T> AsyncFuserNGInner<T> {
@@ -151,6 +158,7 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> AsyncFuserNG<T> {
                 target: target_fs,
                 table: InodeTable::new(),
                 directory_cache: RwLock::new(DirectoryCache::new()),
+                readdirplus_cache: RwLock::new(ReaddirPlusCache::new()),
             }),
             executor,
         }
@@ -753,6 +761,11 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
             match inner.target.opendir(req, path, flags.0 as u32).await {
                 Ok((fh, flags)) => {
                     let cache_key = inner.directory_cache.write().unwrap().new_entry(fh);
+                    inner
+                        .readdirplus_cache
+                        .write()
+                        .unwrap()
+                        .insert(cache_key, tokio::sync::Mutex::new(None));
                     reply.opened(FileHandle(cache_key), FopenFlags::from_bits_retain(flags));
                 }
                 Err(error) => reply.error(error.into()),
@@ -839,6 +852,151 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
         });
     }
 
+    fn readdirplus(
+        &self,
+        req: &fuser::Request,
+        ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
+        mut reply: fuser::ReplyDirectoryPlus,
+    ) {
+        let inner = Arc::clone(&self.inner);
+        let path = get_resolved_path!(inner, ino, reply);
+        let req = req.info();
+        debug!("readdirplus: {:?} @ {}", path, offset);
+
+        let parent_inode = if ino == INodeNo::ROOT {
+            ino
+        } else {
+            match inner.get_parent_inode(ino) {
+                Some(inode) => INodeNo(inode),
+                None => {
+                    error!("readdirplus: unable to get parent inode for {:?}", path);
+                    reply.error(Errno::EIO);
+                    return;
+                }
+            }
+        };
+
+        let Some(slot) = inner.readdirplus_cache.read().unwrap().get(fh.0) else {
+            reply.error(Errno::EINVAL);
+            return;
+        };
+
+        self.spawn(async move {
+            let mut slot = slot.lock().await;
+            if slot.is_none() {
+                let real_fh = inner.directory_cache.read().unwrap().real_fh(fh.0);
+                let producer = inner.target.readdirplus(req, path.clone(), real_fh);
+                *slot = Some(ReaddirPlusState::new(Box::pin(producer)));
+            }
+
+            let state = slot.as_mut().unwrap();
+            let Ok(mut index) = usize::try_from(offset) else {
+                reply.error(Errno::EINVAL);
+                return;
+            };
+            if index > state.entries.len() {
+                reply.error(Errno::EINVAL);
+                return;
+            }
+
+            let mut added = false;
+            loop {
+                if index < state.entries.len() {
+                    let entry = &state.entries[index];
+                    let entry_offset = match u64::try_from(index)
+                        .ok()
+                        .and_then(|value| value.checked_add(1))
+                    {
+                        Some(offset) => offset,
+                        None => {
+                            if added {
+                                reply.ok();
+                            } else {
+                                reply.error(Errno::EOVERFLOW);
+                            }
+                            return;
+                        }
+                    };
+
+                    let (entry_inode, generation, count_lookup) = if entry.name == Path::new(".") {
+                        (ino, Generation(0), false)
+                    } else if entry.name == Path::new("..") {
+                        (parent_inode, Generation(0), false)
+                    } else {
+                        let inode = if entry.attr.kind == FileType::Directory {
+                            inner.add_or_get_dir(ino, &entry.name)
+                        } else {
+                            inner.add_or_get_leaf(ino, &entry.name)
+                        };
+                        match inode {
+                            Some((inode, generation)) => {
+                                (INodeNo(inode), Generation(generation), true)
+                            }
+                            None => {
+                                if added {
+                                    reply.ok();
+                                } else {
+                                    reply.error(Errno::EINVAL);
+                                }
+                                return;
+                            }
+                        }
+                    };
+
+                    let attr = fuse_fileattr(entry.attr, entry_inode);
+                    let buffer_full = reply.add(
+                        entry_inode,
+                        entry_offset,
+                        entry.name.as_os_str(),
+                        &entry.ttl,
+                        &attr,
+                        generation,
+                    );
+                    if buffer_full {
+                        if added {
+                            reply.ok();
+                        } else {
+                            reply.error(Errno::EOVERFLOW);
+                        }
+                        return;
+                    }
+                    if count_lookup {
+                        inner.lookup(entry_inode.0);
+                    }
+                    added = true;
+                    index += 1;
+                    continue;
+                }
+
+                if let Some(error) = state.pending_error {
+                    if added {
+                        reply.ok();
+                    } else {
+                        reply.error(error);
+                    }
+                    return;
+                }
+
+                let Some(producer) = state.producer.as_mut() else {
+                    reply.ok();
+                    return;
+                };
+                let next =
+                    std::future::poll_fn(|context| producer.as_mut().poll_next(context)).await;
+                match next {
+                    Some(Ok(entries)) => state.entries.extend(entries),
+                    Some(Err(error)) => {
+                        state.producer = None;
+                        state.pending_error = Some(error.into());
+                    }
+                    None => state.producer = None,
+                }
+            }
+        });
+    }
+
     fn releasedir(
         &self,
         req: &fuser::Request,
@@ -863,6 +1021,7 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
                 Err(error) => reply.error(error.into()),
             }
             inner.directory_cache.write().unwrap().delete(fh.0);
+            inner.readdirplus_cache.write().unwrap().delete(fh.0);
         });
     }
 
