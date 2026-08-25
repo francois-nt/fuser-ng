@@ -171,21 +171,11 @@ impl<T> ToIoResult<T> for Result<T, libc::c_int> {
 }
 
 const TTL: Duration = Duration::from_secs(1);
-const READDIRPLUS_BATCH_SIZE: usize = 128;
+const READDIR_BATCH_SIZE: usize = 128;
 
 impl Filesystem for PassthroughFS {
-    fn init(&self, _req: RequestInfo, config: &mut KernelConfig) -> ResultEmpty {
+    fn init(&self, _req: RequestInfo, _config: &mut KernelConfig) -> ResultEmpty {
         debug!("init");
-        #[cfg(feature = "readdirplus")]
-        config
-            .add_capabilities(InitFlags::FUSE_DO_READDIRPLUS)
-            .map_err(|unsupported| {
-                io::Error::other(format!(
-                    "kernel does not support required capabilities: {unsupported:?}"
-                ))
-            })?;
-        #[cfg(not(feature = "readdirplus"))]
-        let _ = config;
         Ok(())
     }
 
@@ -233,76 +223,19 @@ impl Filesystem for PassthroughFS {
         libc_wrappers::closedir(fh).io_result()
     }
 
-    fn readdir(&self, _req: RequestInfo, path: &ResolvedPath, fh: u64) -> ResultReaddir {
-        debug!("readdir: {:?}", path);
-        let mut entries: Vec<DirectoryEntry> = vec![];
-
-        if fh == 0 {
-            error!("readdir: missing fh");
-            return Err(libc::EINVAL.io_error());
-        }
-        let path = path.full_path();
-        loop {
-            match libc_wrappers::readdir(fh) {
-                Ok(Some(entry)) => {
-                    let name_c = unsafe { CStr::from_ptr(entry.d_name.as_ptr()) };
-                    let name = OsStr::from_bytes(name_c.to_bytes()).to_owned();
-
-                    let filetype = match entry.d_type {
-                        libc::DT_DIR => FileType::Directory,
-                        libc::DT_REG => FileType::RegularFile,
-                        libc::DT_LNK => FileType::Symlink,
-                        libc::DT_BLK => FileType::BlockDevice,
-                        libc::DT_CHR => FileType::CharDevice,
-                        libc::DT_FIFO => FileType::NamedPipe,
-                        libc::DT_SOCK => {
-                            warn!("FUSE doesn't support Socket file type; translating to NamedPipe instead.");
-                            FileType::NamedPipe
-                        }
-                        _ => {
-                            let entry_path = path.join(&name);
-                            let real_path = self.real_path(&entry_path);
-                            match libc_wrappers::lstat(real_path) {
-                                Ok(stat64) => mode_to_filetype(stat64.st_mode),
-                                Err(errno) => {
-                                    let ioerr = io::Error::from_raw_os_error(errno);
-                                    panic!("lstat failed after readdir_r gave no file type for {:?}: {}",
-                                           entry_path, ioerr);
-                                }
-                            }
-                        }
-                    };
-
-                    entries.push(DirectoryEntry {
-                        name,
-                        kind: filetype,
-                    })
-                }
-                Ok(None) => {
-                    break;
-                }
-                Err(e) => {
-                    error!("readdir: {:?}: {}", path, e);
-                    return Err(e.io_error());
-                }
-            }
-        }
-
-        Ok(entries)
-    }
-
-    fn readdirplus(
+    #[cfg(feature = "legacy_readdir")]
+    fn legacy_readdir(
         &self,
         _req: RequestInfo,
         path: &ResolvedPath,
         fh: u64,
-    ) -> impl Iterator<Item = io::Result<Vec<DirectoryEntryPlus>>> + Send + 'static {
-        debug!("readdirplus: {:?}", path);
+    ) -> impl Iterator<Item = io::Result<Vec<LegacyDirectoryEntry>>> + Send + 'static {
+        debug!("legacy_readdir: {:?}", path);
         let filesystem = self.clone();
         let path = path.full_path();
         let mut finished = false;
         let mut pending_error = (fh == 0).then(|| {
-            error!("readdirplus: missing fh");
+            error!("legacy_readdir: missing fh");
             libc::EINVAL.io_error()
         });
 
@@ -315,8 +248,8 @@ impl Filesystem for PassthroughFS {
                 return None;
             }
 
-            let mut entries = Vec::with_capacity(READDIRPLUS_BATCH_SIZE);
-            while entries.len() < READDIRPLUS_BATCH_SIZE {
+            let mut entries = Vec::with_capacity(READDIR_BATCH_SIZE);
+            while entries.len() < READDIR_BATCH_SIZE {
                 let entry = match libc_wrappers::readdir(fh) {
                     Ok(Some(entry)) => entry,
                     Ok(None) => {
@@ -325,7 +258,89 @@ impl Filesystem for PassthroughFS {
                     }
                     Err(errno) => {
                         let error = errno.io_error();
-                        error!("readdirplus: {:?}: {}", path, error);
+                        error!("legacy_readdir: {:?}: {}", path, error);
+                        if entries.is_empty() {
+                            finished = true;
+                            return Some(Err(error));
+                        }
+                        pending_error = Some(error);
+                        break;
+                    }
+                };
+
+                let name_c = unsafe { CStr::from_ptr(entry.d_name.as_ptr()) };
+                let name = OsStr::from_bytes(name_c.to_bytes()).to_owned();
+                let kind = match entry.d_type {
+                    libc::DT_DIR => FileType::Directory,
+                    libc::DT_REG => FileType::RegularFile,
+                    libc::DT_LNK => FileType::Symlink,
+                    libc::DT_BLK => FileType::BlockDevice,
+                    libc::DT_CHR => FileType::CharDevice,
+                    libc::DT_FIFO => FileType::NamedPipe,
+                    libc::DT_SOCK => {
+                        warn!("FUSE doesn't support Socket file type; translating to NamedPipe instead.");
+                        FileType::NamedPipe
+                    }
+                    _ => {
+                        let entry_path = path.join(&name);
+                        let real_path = filesystem.real_path(&entry_path);
+                        match libc_wrappers::lstat(real_path) {
+                            Ok(stat) => mode_to_filetype(stat.st_mode),
+                            Err(errno) => {
+                                let error = errno.io_error();
+                                error!("legacy_readdir: {:?}: {}", entry_path, error);
+                                if entries.is_empty() {
+                                    finished = true;
+                                    return Some(Err(error));
+                                }
+                                pending_error = Some(error);
+                                break;
+                            }
+                        }
+                    }
+                };
+                entries.push(LegacyDirectoryEntry { name, kind });
+            }
+
+            (!entries.is_empty()).then_some(Ok(entries))
+        })
+    }
+
+    fn readdir(
+        &self,
+        _req: RequestInfo,
+        path: &ResolvedPath,
+        fh: u64,
+    ) -> impl Iterator<Item = io::Result<Vec<DirectoryEntry>>> + Send + 'static {
+        debug!("readdir: {:?}", path);
+        let filesystem = self.clone();
+        let path = path.full_path();
+        let mut finished = false;
+        let mut pending_error = (fh == 0).then(|| {
+            error!("readdir: missing fh");
+            libc::EINVAL.io_error()
+        });
+
+        std::iter::from_fn(move || {
+            if let Some(error) = pending_error.take() {
+                finished = true;
+                return Some(Err(error));
+            }
+            if finished {
+                return None;
+            }
+
+            let mut entries = Vec::with_capacity(READDIR_BATCH_SIZE);
+            while entries.len() < READDIR_BATCH_SIZE {
+                let entry = match libc_wrappers::readdir(fh) {
+                    Ok(Some(entry)) => entry,
+                    Ok(None) => {
+                        finished = true;
+                        break;
+                    }
+                    Err(errno) => {
+                        let error = errno.io_error();
+                        error!("readdir: {:?}: {}", path, error);
                         if entries.is_empty() {
                             finished = true;
                             return Some(Err(error));
@@ -356,7 +371,7 @@ impl Filesystem for PassthroughFS {
                     }
                 };
 
-                entries.push(DirectoryEntryPlus {
+                entries.push(DirectoryEntry {
                     name,
                     ttl: TTL,
                     attr,

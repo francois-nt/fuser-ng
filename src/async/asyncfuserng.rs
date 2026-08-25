@@ -5,6 +5,8 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
+#[cfg(not(feature = "legacy_readdir"))]
+use fuser::InitFlags;
 use fuser::{
     AccessFlags, Errno, FileHandle, FopenFlags, Generation, INodeNo, LockOwner, OpenFlags,
     RenameFlags, TimeOrNow, WriteFlags,
@@ -13,13 +15,46 @@ use futures_core::Stream;
 
 use super::AsyncFilesystem;
 use crate::FileType;
-use crate::directory_cache::{DirectoryCache, ReaddirPlusCache, ReaddirPlusState};
+use crate::directory_cache::{DirectoryCache, ReaddirCache, ReaddirState};
 use crate::inode_table::{InodeTable, InodeToPath};
 use crate::types::*;
 
-type ReaddirPlusStream =
-    Pin<Box<dyn Stream<Item = std::io::Result<Vec<DirectoryEntryPlus>>> + Send>>;
-type ReaddirPlusSlot = tokio::sync::Mutex<Option<ReaddirPlusState<ReaddirPlusStream>>>;
+type ReaddirStream = Pin<Box<dyn Stream<Item = std::io::Result<Vec<DirectoryEntry>>> + Send>>;
+type ReaddirSlot = tokio::sync::Mutex<Option<ReaddirState<ReaddirStream, DirectoryEntry>>>;
+
+#[cfg(feature = "legacy_readdir")]
+type LegacyReaddirStream =
+    Pin<Box<dyn Stream<Item = std::io::Result<Vec<LegacyDirectoryEntry>>> + Send>>;
+#[cfg(feature = "legacy_readdir")]
+type LegacyReaddirSlot =
+    tokio::sync::Mutex<Option<ReaddirState<LegacyReaddirStream, LegacyDirectoryEntry>>>;
+
+/// FUSE directory reply backed by the modern readdir stream.
+enum ReaddirReply {
+    #[cfg(not(feature = "legacy_readdir"))]
+    Plain(fuser::ReplyDirectory),
+    Plus(fuser::ReplyDirectoryPlus),
+}
+
+impl ReaddirReply {
+    /// Completes the reply successfully.
+    fn ok(self) {
+        match self {
+            #[cfg(not(feature = "legacy_readdir"))]
+            Self::Plain(reply) => reply.ok(),
+            Self::Plus(reply) => reply.ok(),
+        }
+    }
+
+    /// Completes the reply with an error.
+    fn error(self, error: Errno) {
+        match self {
+            #[cfg(not(feature = "legacy_readdir"))]
+            Self::Plain(reply) => reply.error(error),
+            Self::Plus(reply) => reply.error(error),
+        }
+    }
+}
 
 trait IntoRequestInfo {
     fn info(&self) -> RequestInfo;
@@ -76,7 +111,9 @@ struct AsyncFuserNGInner<T> {
     target: T,
     table: InodeTable,
     directory_cache: RwLock<DirectoryCache>,
-    readdirplus_cache: RwLock<ReaddirPlusCache<ReaddirPlusSlot>>,
+    readdir_cache: RwLock<ReaddirCache<ReaddirSlot>>,
+    #[cfg(feature = "legacy_readdir")]
+    legacy_readdir_cache: RwLock<ReaddirCache<LegacyReaddirSlot>>,
 }
 
 impl<T> AsyncFuserNGInner<T> {
@@ -130,6 +167,267 @@ impl<T> AsyncFuserNGInner<T> {
         self.table
             .rename(oldparent.0, oldname, newparent.0, newname)
     }
+
+    /// Adds an entry to a plain FUSE readdir reply without creating a lookup reference.
+    #[cfg(not(feature = "legacy_readdir"))]
+    fn add_plain_readdir_entry(
+        &self,
+        reply: &mut fuser::ReplyDirectory,
+        entry: &DirectoryEntry,
+        ino: INodeNo,
+        parent_inode: INodeNo,
+        entry_offset: u64,
+    ) -> bool {
+        let entry_inode = if entry.name == Path::new(".") {
+            ino
+        } else if entry.name == Path::new("..") {
+            parent_inode
+        } else {
+            INodeNo(!1u64)
+        };
+        reply.add(
+            entry_inode,
+            entry_offset,
+            entry.attr.kind,
+            entry.name.as_os_str(),
+        )
+    }
+
+    /// Adds an entry to a FUSE readdirplus reply and records its lookup on success.
+    fn add_readdirplus_entry(
+        &self,
+        reply: &mut fuser::ReplyDirectoryPlus,
+        entry: &DirectoryEntry,
+        ino: INodeNo,
+        parent_inode: INodeNo,
+        entry_offset: u64,
+    ) -> Result<bool, Errno> {
+        let (entry_inode, generation, count_lookup) = if entry.name == Path::new(".") {
+            (ino, Generation(0), false)
+        } else if entry.name == Path::new("..") {
+            (parent_inode, Generation(0), false)
+        } else {
+            let inode = if entry.attr.kind == FileType::Directory {
+                self.add_or_get_dir(ino, &entry.name)
+            } else {
+                self.add_or_get_leaf(ino, &entry.name)
+            };
+            let Some((inode, generation)) = inode else {
+                return Err(Errno::EINVAL);
+            };
+            (INodeNo(inode), Generation(generation), true)
+        };
+
+        let attr = fuse_fileattr(entry.attr, entry_inode);
+        let buffer_full = reply.add(
+            entry_inode,
+            entry_offset,
+            entry.name.as_os_str(),
+            &entry.ttl,
+            &attr,
+            generation,
+        );
+        if !buffer_full && count_lookup {
+            self.lookup(entry_inode.0);
+        }
+        Ok(buffer_full)
+    }
+
+    /// Adds a modern entry to either form of FUSE directory reply.
+    fn add_readdir_entry(
+        &self,
+        reply: &mut ReaddirReply,
+        entry: &DirectoryEntry,
+        ino: INodeNo,
+        parent_inode: INodeNo,
+        entry_offset: u64,
+    ) -> Result<bool, Errno> {
+        match reply {
+            #[cfg(not(feature = "legacy_readdir"))]
+            ReaddirReply::Plain(reply) => {
+                Ok(self.add_plain_readdir_entry(reply, entry, ino, parent_inode, entry_offset))
+            }
+            ReaddirReply::Plus(reply) => {
+                self.add_readdirplus_entry(reply, entry, ino, parent_inode, entry_offset)
+            }
+        }
+    }
+
+    /// Fills one FUSE directory reply from the modern asynchronous stream.
+    async fn fill_readdir(
+        &self,
+        state: &mut ReaddirState<ReaddirStream, DirectoryEntry>,
+        ino: INodeNo,
+        parent_inode: INodeNo,
+        offset: u64,
+        mut reply: ReaddirReply,
+    ) {
+        let Ok(mut index) = usize::try_from(offset) else {
+            reply.error(Errno::EINVAL);
+            return;
+        };
+        if index > state.entries.len() {
+            reply.error(Errno::EINVAL);
+            return;
+        }
+
+        let mut added = false;
+        loop {
+            if index < state.entries.len() {
+                let entry = &state.entries[index];
+                let entry_offset = match u64::try_from(index)
+                    .ok()
+                    .and_then(|value| value.checked_add(1))
+                {
+                    Some(offset) => offset,
+                    None => {
+                        if added {
+                            reply.ok();
+                        } else {
+                            reply.error(Errno::EOVERFLOW);
+                        }
+                        return;
+                    }
+                };
+                let buffer_full = match self.add_readdir_entry(
+                    &mut reply,
+                    entry,
+                    ino,
+                    parent_inode,
+                    entry_offset,
+                ) {
+                    Ok(buffer_full) => buffer_full,
+                    Err(error) => {
+                        if added {
+                            reply.ok();
+                        } else {
+                            reply.error(error);
+                        }
+                        return;
+                    }
+                };
+                if buffer_full {
+                    if added {
+                        reply.ok();
+                    } else {
+                        reply.error(Errno::EOVERFLOW);
+                    }
+                    return;
+                }
+                added = true;
+                index += 1;
+                continue;
+            }
+
+            if let Some(error) = state.pending_error {
+                if added {
+                    reply.ok();
+                } else {
+                    reply.error(error);
+                }
+                return;
+            }
+
+            let Some(producer) = state.producer.as_mut() else {
+                reply.ok();
+                return;
+            };
+            match std::future::poll_fn(|context| producer.as_mut().poll_next(context)).await {
+                Some(Ok(entries)) => state.entries.extend(entries),
+                Some(Err(error)) => {
+                    state.producer = None;
+                    state.pending_error = Some(error.into());
+                }
+                None => state.producer = None,
+            }
+        }
+    }
+
+    /// Fills one legacy FUSE readdir reply from its independent asynchronous stream.
+    #[cfg(feature = "legacy_readdir")]
+    async fn fill_legacy_readdir(
+        &self,
+        state: &mut ReaddirState<LegacyReaddirStream, LegacyDirectoryEntry>,
+        ino: INodeNo,
+        parent_inode: INodeNo,
+        offset: u64,
+        mut reply: fuser::ReplyDirectory,
+    ) {
+        let Ok(mut index) = usize::try_from(offset) else {
+            reply.error(Errno::EINVAL);
+            return;
+        };
+        if index > state.entries.len() {
+            reply.error(Errno::EINVAL);
+            return;
+        }
+
+        let mut added = false;
+        loop {
+            if index < state.entries.len() {
+                let entry = &state.entries[index];
+                let entry_offset = match u64::try_from(index)
+                    .ok()
+                    .and_then(|value| value.checked_add(1))
+                {
+                    Some(offset) => offset,
+                    None => {
+                        if added {
+                            reply.ok();
+                        } else {
+                            reply.error(Errno::EOVERFLOW);
+                        }
+                        return;
+                    }
+                };
+                let entry_inode = if entry.name == Path::new(".") {
+                    ino
+                } else if entry.name == Path::new("..") {
+                    parent_inode
+                } else {
+                    INodeNo(!1u64)
+                };
+                if reply.add(
+                    entry_inode,
+                    entry_offset,
+                    entry.kind,
+                    entry.name.as_os_str(),
+                ) {
+                    if added {
+                        reply.ok();
+                    } else {
+                        reply.error(Errno::EOVERFLOW);
+                    }
+                    return;
+                }
+                added = true;
+                index += 1;
+                continue;
+            }
+
+            if let Some(error) = state.pending_error {
+                if added {
+                    reply.ok();
+                } else {
+                    reply.error(error);
+                }
+                return;
+            }
+
+            let Some(producer) = state.producer.as_mut() else {
+                reply.ok();
+                return;
+            };
+            match std::future::poll_fn(|context| producer.as_mut().poll_next(context)).await {
+                Some(Ok(entries)) => state.entries.extend(entries),
+                Some(Err(error)) => {
+                    state.producer = None;
+                    state.pending_error = Some(error.into());
+                }
+                None => state.producer = None,
+            }
+        }
+    }
 }
 
 mod executor {
@@ -158,7 +456,9 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> AsyncFuserNG<T> {
                 target: target_fs,
                 table: InodeTable::new(),
                 directory_cache: RwLock::new(DirectoryCache::new()),
-                readdirplus_cache: RwLock::new(ReaddirPlusCache::new()),
+                readdir_cache: RwLock::new(ReaddirCache::new()),
+                #[cfg(feature = "legacy_readdir")]
+                legacy_readdir_cache: RwLock::new(ReaddirCache::new()),
             }),
             executor,
         }
@@ -203,7 +503,12 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
         config: &mut fuser::KernelConfig,
     ) -> Result<(), std::io::Error> {
         debug!("init");
-        self.inner.target.init(req.info(), config)
+        self.inner.target.init(req.info(), config)?;
+        #[cfg(not(feature = "legacy_readdir"))]
+        if let Err(unsupported) = config.add_capabilities(InitFlags::FUSE_DO_READDIRPLUS) {
+            warn!("kernel does not support FUSE_READDIRPLUS: {unsupported:?}");
+        }
+        Ok(())
     }
 
     fn destroy(&mut self) {
@@ -762,7 +1067,13 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
                 Ok((fh, flags)) => {
                     let cache_key = inner.directory_cache.write().unwrap().new_entry(fh);
                     inner
-                        .readdirplus_cache
+                        .readdir_cache
+                        .write()
+                        .unwrap()
+                        .insert(cache_key, tokio::sync::Mutex::new(None));
+                    #[cfg(feature = "legacy_readdir")]
+                    inner
+                        .legacy_readdir_cache
                         .write()
                         .unwrap()
                         .insert(cache_key, tokio::sync::Mutex::new(None));
@@ -779,7 +1090,7 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
         ino: INodeNo,
         fh: FileHandle,
         offset: u64,
-        mut reply: fuser::ReplyDirectory,
+        reply: fuser::ReplyDirectory,
     ) {
         let inner = Arc::clone(&self.inner);
         let path = get_resolved_path!(inner, ino, reply);
@@ -800,55 +1111,45 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
         };
 
         self.spawn(async move {
-            let cached_entries = {
-                inner
-                    .directory_cache
-                    .write()
-                    .unwrap()
-                    .get_mut(fh.0)
-                    .entries
-                    .clone()
-            };
-
-            let entries = match cached_entries {
-                Some(entries) => entries,
-                None => {
-                    let real_fh = inner.directory_cache.read().unwrap().real_fh(fh.0);
-                    match inner.target.readdir(req, path, real_fh).await {
-                        Ok(entries) => {
-                            inner.directory_cache.write().unwrap().get_mut(fh.0).entries =
-                                Some(entries.clone());
-                            entries
-                        }
-                        Err(error) => {
-                            reply.error(error.into());
-                            return;
-                        }
-                    }
-                }
-            };
-
-            for (index, entry) in entries.iter().skip(offset as usize).enumerate() {
-                let entry_inode = if entry.name == Path::new(".") {
-                    ino
-                } else if entry.name == Path::new("..") {
-                    parent_inode
-                } else {
-                    INodeNo(!1u64)
+            #[cfg(feature = "legacy_readdir")]
+            {
+                let Some(slot) = inner.legacy_readdir_cache.read().unwrap().get(fh.0) else {
+                    reply.error(Errno::EINVAL);
+                    return;
                 };
-
-                let buffer_full = reply.add(
-                    entry_inode,
-                    offset + index as u64 + 1,
-                    entry.kind,
-                    entry.name.as_os_str(),
-                );
-                if buffer_full {
-                    break;
+                let mut slot = slot.lock().await;
+                if slot.is_none() {
+                    let real_fh = inner.directory_cache.read().unwrap().real_fh(fh.0);
+                    let producer = inner.target.legacy_readdir(req, path, real_fh);
+                    *slot = Some(ReaddirState::new(Box::pin(producer)));
                 }
+                inner
+                    .fill_legacy_readdir(slot.as_mut().unwrap(), ino, parent_inode, offset, reply)
+                    .await;
             }
 
-            reply.ok();
+            #[cfg(not(feature = "legacy_readdir"))]
+            {
+                let Some(slot) = inner.readdir_cache.read().unwrap().get(fh.0) else {
+                    reply.error(Errno::EINVAL);
+                    return;
+                };
+                let mut slot = slot.lock().await;
+                if slot.is_none() {
+                    let real_fh = inner.directory_cache.read().unwrap().real_fh(fh.0);
+                    let producer = inner.target.readdir(req, path, real_fh);
+                    *slot = Some(ReaddirState::new(Box::pin(producer)));
+                }
+                inner
+                    .fill_readdir(
+                        slot.as_mut().unwrap(),
+                        ino,
+                        parent_inode,
+                        offset,
+                        ReaddirReply::Plain(reply),
+                    )
+                    .await;
+            }
         });
     }
 
@@ -858,7 +1159,7 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
         ino: INodeNo,
         fh: FileHandle,
         offset: u64,
-        mut reply: fuser::ReplyDirectoryPlus,
+        reply: fuser::ReplyDirectoryPlus,
     ) {
         let inner = Arc::clone(&self.inner);
         let path = get_resolved_path!(inner, ino, reply);
@@ -878,7 +1179,7 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
             }
         };
 
-        let Some(slot) = inner.readdirplus_cache.read().unwrap().get(fh.0) else {
+        let Some(slot) = inner.readdir_cache.read().unwrap().get(fh.0) else {
             reply.error(Errno::EINVAL);
             return;
         };
@@ -887,113 +1188,18 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
             let mut slot = slot.lock().await;
             if slot.is_none() {
                 let real_fh = inner.directory_cache.read().unwrap().real_fh(fh.0);
-                let producer = inner.target.readdirplus(req, path.clone(), real_fh);
-                *slot = Some(ReaddirPlusState::new(Box::pin(producer)));
+                let producer = inner.target.readdir(req, path, real_fh);
+                *slot = Some(ReaddirState::new(Box::pin(producer)));
             }
-
-            let state = slot.as_mut().unwrap();
-            let Ok(mut index) = usize::try_from(offset) else {
-                reply.error(Errno::EINVAL);
-                return;
-            };
-            if index > state.entries.len() {
-                reply.error(Errno::EINVAL);
-                return;
-            }
-
-            let mut added = false;
-            loop {
-                if index < state.entries.len() {
-                    let entry = &state.entries[index];
-                    let entry_offset = match u64::try_from(index)
-                        .ok()
-                        .and_then(|value| value.checked_add(1))
-                    {
-                        Some(offset) => offset,
-                        None => {
-                            if added {
-                                reply.ok();
-                            } else {
-                                reply.error(Errno::EOVERFLOW);
-                            }
-                            return;
-                        }
-                    };
-
-                    let (entry_inode, generation, count_lookup) = if entry.name == Path::new(".") {
-                        (ino, Generation(0), false)
-                    } else if entry.name == Path::new("..") {
-                        (parent_inode, Generation(0), false)
-                    } else {
-                        let inode = if entry.attr.kind == FileType::Directory {
-                            inner.add_or_get_dir(ino, &entry.name)
-                        } else {
-                            inner.add_or_get_leaf(ino, &entry.name)
-                        };
-                        match inode {
-                            Some((inode, generation)) => {
-                                (INodeNo(inode), Generation(generation), true)
-                            }
-                            None => {
-                                if added {
-                                    reply.ok();
-                                } else {
-                                    reply.error(Errno::EINVAL);
-                                }
-                                return;
-                            }
-                        }
-                    };
-
-                    let attr = fuse_fileattr(entry.attr, entry_inode);
-                    let buffer_full = reply.add(
-                        entry_inode,
-                        entry_offset,
-                        entry.name.as_os_str(),
-                        &entry.ttl,
-                        &attr,
-                        generation,
-                    );
-                    if buffer_full {
-                        if added {
-                            reply.ok();
-                        } else {
-                            reply.error(Errno::EOVERFLOW);
-                        }
-                        return;
-                    }
-                    if count_lookup {
-                        inner.lookup(entry_inode.0);
-                    }
-                    added = true;
-                    index += 1;
-                    continue;
-                }
-
-                if let Some(error) = state.pending_error {
-                    if added {
-                        reply.ok();
-                    } else {
-                        reply.error(error);
-                    }
-                    return;
-                }
-
-                let Some(producer) = state.producer.as_mut() else {
-                    reply.ok();
-                    return;
-                };
-                let next =
-                    std::future::poll_fn(|context| producer.as_mut().poll_next(context)).await;
-                match next {
-                    Some(Ok(entries)) => state.entries.extend(entries),
-                    Some(Err(error)) => {
-                        state.producer = None;
-                        state.pending_error = Some(error.into());
-                    }
-                    None => state.producer = None,
-                }
-            }
+            inner
+                .fill_readdir(
+                    slot.as_mut().unwrap(),
+                    ino,
+                    parent_inode,
+                    offset,
+                    ReaddirReply::Plus(reply),
+                )
+                .await;
         });
     }
 
@@ -1021,7 +1227,9 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
                 Err(error) => reply.error(error.into()),
             }
             inner.directory_cache.write().unwrap().delete(fh.0);
-            inner.readdirplus_cache.write().unwrap().delete(fh.0);
+            inner.readdir_cache.write().unwrap().delete(fh.0);
+            #[cfg(feature = "legacy_readdir")]
+            inner.legacy_readdir_cache.write().unwrap().delete(fh.0);
         });
     }
 

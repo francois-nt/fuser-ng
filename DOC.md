@@ -1,14 +1,15 @@
 # fuser-ng
 
 `fuser-ng` is a higher-level, path-oriented FUSE filesystem library for Rust,
-built on top of [`fuser`](https://github.com/cberner/fuser) 0.17.
+built on top of [`fuser`](https://github.com/cberner/fuser) 0.18.
 
 It started as a fork of `fuse-mt`. The 0.7 series moved the crate to `fuser`
 0.17, uses fuser's native threading instead of an internal thread pool, and
 adds a new inode table that keeps descendant paths correct when a parent
 directory is renamed. Version 0.8 refines the public path API for inode-aware
 `getattr` and `create` callbacks and adds an optional asynchronous filesystem
-interface.
+interface. Version 0.9 adds streaming directory reads for synchronous and
+asynchronous filesystems.
 
 ## Overview
 
@@ -22,7 +23,8 @@ The crate:
 * lets `Filesystem` methods return `std::io::Result` values instead of using
   fuser reply objects directly;
 * provides default `ENOSYS` implementations for operations you do not support;
-* simplifies `readdir` by handling FUSE pagination internally;
+* streams directory entries in batches while handling FUSE pagination
+  internally;
 * uses fuser's threaded event loop, configurable with `ThreadCount`;
 * optionally adapts futures returned by `AsyncFilesystem` through a caller-owned
   Tokio runtime;
@@ -55,7 +57,7 @@ Add the crate to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-fuser-ng = "0.8"
+fuser-ng = "0.9"
 ```
 
 Implement `fuser_ng::Filesystem`, then wrap it before mounting:
@@ -71,6 +73,17 @@ fuser_ng::mount(
 )?;
 ```
 
+## Directory reads
+
+`Filesystem::readdir` returns directory entries in batches. Each
+`DirectoryEntry` contains the entry name, its attributes, and their cache
+duration. Implementations can choose an appropriate batch size and produce
+entries incrementally instead of collecting the complete directory first.
+
+The adapter consumes batches as reply space becomes available and handles
+directory offsets internally. `AsyncFilesystem::readdir` provides the same
+model through an asynchronous `Stream`.
+
 ## Asynchronous filesystems
 
 Asynchronous support is opt-in. Enable the `async` feature and provide Tokio
@@ -78,7 +91,7 @@ with a multithreaded runtime:
 
 ```toml
 [dependencies]
-fuser-ng = { version = "0.8.2", features = ["async"] }
+fuser-ng = { version = "0.9", features = ["async"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 ```
 

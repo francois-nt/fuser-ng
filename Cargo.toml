@@ -1,12 +1,14 @@
 [package]
 name = "fuser-ng"
-version = "0.8.2"
-authors = ["William R. Fraser <wfraser@codewise.org>", "François NT <francois@iobuffer.me>"]
+version = "0.9.0"
+authors = ["François NT <francois@iobuffer.me>", "William R. Fraser <wfraser@codewise.org>"]
 repository = "https://github.com/francois-nt/fuser-ng"
 description = "A higher-level path-oriented FUSE filesystem library with optional async support."
 categories = ["filesystem", "asynchronous", "os::unix-apis"]
 keywords = ["fuse", "fuser", "filesystem", "async", "userspace"]
 license = "MIT OR Apache-2.0"
+homepage = "https://github.com/francois-nt/fuser-ng"
+documentation = "https://docs.rs/fuser-ng"
 readme = "DOC.md"
 edition = "2024"
 rust-version = "1.85"
@@ -30,6 +32,11 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync"], optional = true
 [features]
 default = []
 async = ["dep:futures-core", "dep:tokio"]
+legacy_readdir = []
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [workspace]
 members = [".", "example"]

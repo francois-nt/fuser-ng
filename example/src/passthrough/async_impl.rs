@@ -3,15 +3,13 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-type ReaddirPlusItem = io::Result<Vec<DirectoryEntryPlus>>;
-
 /// Streams batches produced by a blocking directory reader.
-struct ReaddirPlusReceiver {
-    receiver: tokio::sync::mpsc::Receiver<ReaddirPlusItem>,
+struct ReceiverStream<T> {
+    receiver: tokio::sync::mpsc::Receiver<T>,
 }
 
-impl Stream for ReaddirPlusReceiver {
-    type Item = ReaddirPlusItem;
+impl<T> Stream for ReceiverStream<T> {
+    type Item = T;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.receiver.poll_recv(context)
@@ -213,27 +211,41 @@ impl AsyncFilesystem for PassthroughFS {
         -> ResultOpen => |filesystem| Filesystem::opendir(&filesystem, req, &path, flags)
     );
 
-    forward_operation!(
-        readdir(req: RequestInfo, path: ResolvedPath, fh: u64)
-        -> ResultReaddir => |filesystem| Filesystem::readdir(&filesystem, req, &path, fh)
-    );
-
-    fn readdirplus(
+    fn readdir(
         &self,
         req: RequestInfo,
         path: ResolvedPath,
         fh: u64,
-    ) -> impl Stream<Item = ReaddirPlusItem> + Send + 'static {
+    ) -> impl Stream<Item = io::Result<Vec<DirectoryEntry>>> + Send + 'static {
         let filesystem = self.clone();
         let (sender, receiver) = tokio::sync::mpsc::channel(1);
         tokio::task::spawn_blocking(move || {
-            for entries in Filesystem::readdirplus(&filesystem, req, &path, fh) {
+            for entries in Filesystem::readdir(&filesystem, req, &path, fh) {
                 if sender.blocking_send(entries).is_err() {
                     break;
                 }
             }
         });
-        ReaddirPlusReceiver { receiver }
+        ReceiverStream { receiver }
+    }
+
+    #[cfg(feature = "legacy_readdir")]
+    fn legacy_readdir(
+        &self,
+        req: RequestInfo,
+        path: ResolvedPath,
+        fh: u64,
+    ) -> impl Stream<Item = io::Result<Vec<LegacyDirectoryEntry>>> + Send + 'static {
+        let filesystem = self.clone();
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        tokio::task::spawn_blocking(move || {
+            for entries in Filesystem::legacy_readdir(&filesystem, req, &path, fh) {
+                if sender.blocking_send(entries).is_err() {
+                    break;
+                }
+            }
+        });
+        ReceiverStream { receiver }
     }
 
     forward_operation!(

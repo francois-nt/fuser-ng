@@ -8,14 +8,13 @@ Run the synchronous example from the workspace root:
 
     cargo run -p passthrufs --bin passthrufs -- <path to filesystem> <mount point>
 
-Add `--features readdirplus` to force the use of FUSE_READDIRPLUS.
+Add `--features legacy_readdir` to use the optional legacy directory interface.
 
 Run the asynchronous example, which forwards blocking filesystem calls through
 Tokio's blocking thread pool:
 
     cargo run -p passthrufs --features async --bin async-passthrough -- <path to filesystem> <mount point>
 
-Use `--features async,readdirplus` to force FUSE_READDIRPLUS in the asynchronous
-example.
+Use `--features async,legacy_readdir` to enable it in the asynchronous example.
 
 Unmount it with `fusermount -u <mount point>` or just CTRL-C the running program.

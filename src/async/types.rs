@@ -10,10 +10,12 @@ use std::time::SystemTime;
 use futures_core::Stream;
 
 use crate::{
-    DirectoryEntryPlus, EntryName, EntryRef, KernelConfig, RequestInfo, ResolvedPath, ResultCreate,
-    ResultData, ResultEmpty, ResultEntry, ResultOpen, ResultReaddir, ResultStatfs, ResultWrite,
-    ResultXattr,
+    DirectoryEntry, EntryName, EntryRef, KernelConfig, RequestInfo, ResolvedPath, ResultCreate,
+    ResultData, ResultEmpty, ResultEntry, ResultOpen, ResultStatfs, ResultWrite, ResultXattr,
 };
+
+#[cfg(feature = "legacy_readdir")]
+use crate::LegacyDirectoryEntry;
 
 #[cfg(target_os = "macos")]
 use crate::ResultXTimes;
@@ -224,23 +226,24 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         flags: u32,
     ) -> impl Future<Output = ResultOpen> + Send;
 
-    /// Gets all entries of a directory.
-    fn readdir(
-        &self,
-        req: RequestInfo,
-        path: ResolvedPath,
-        fh: u64,
-    ) -> impl Future<Output = ResultReaddir> + Send;
-
     /// Gets directory entries and attributes as an asynchronous stream of batches.
-    ///
-    /// The target filesystem must request the desired READDIRPLUS capability during init.
-    fn readdirplus(
+    fn readdir(
         &self,
         _req: RequestInfo,
         _path: ResolvedPath,
         _fh: u64,
-    ) -> impl Stream<Item = std::io::Result<Vec<DirectoryEntryPlus>>> + Send + 'static {
+    ) -> impl Stream<Item = std::io::Result<Vec<DirectoryEntry>>> + Send + 'static {
+        Once(Some(Err(std::io::Error::from_raw_os_error(libc::ENOSYS))))
+    }
+
+    /// Gets directory entries without attributes for the legacy FUSE readdir operation.
+    #[cfg(feature = "legacy_readdir")]
+    fn legacy_readdir(
+        &self,
+        _req: RequestInfo,
+        _path: ResolvedPath,
+        _fh: u64,
+    ) -> impl Stream<Item = std::io::Result<Vec<LegacyDirectoryEntry>>> + Send + 'static {
         Once(Some(Err(std::io::Error::from_raw_os_error(libc::ENOSYS))))
     }
 

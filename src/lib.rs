@@ -1,4 +1,5 @@
 #![doc = include_str!("../DOC.md")]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 // FuserNG -- A higher-level FUSE (Filesystem in Userspace) interface and wrapper around the
 // low-level `fuser`` library that makes implementing a filesystem a bit easier.
@@ -28,6 +29,7 @@ mod types;
 pub use r#async::{AsyncFilesystem, AsyncFuserNG};
 #[cfg(feature = "async")]
 pub use futures_core::Stream;
+/// Asynchronous counterparts to the main filesystem trait and adapter.
 #[cfg(feature = "async")]
 pub mod asynchronous {
     pub use crate::AsyncFilesystem as Filesystem;

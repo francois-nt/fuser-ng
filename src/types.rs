@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+/// Inode number used by the public path-oriented API.
 pub type Inode = u64;
 
 /// Info about a request.
@@ -25,24 +26,25 @@ pub struct RequestInfo {
     pub pid: u32,
 }
 
-/// A directory entry.
+/// A directory entry together with its attributes.
 #[derive(Clone, Debug)]
 pub struct DirectoryEntry {
-    /// Name of the entry
-    pub name: OsString,
-    /// Kind of file (directory, file, pipe, etc.)
-    pub kind: crate::FileType,
-}
-
-/// A directory entry returned by readdirplus.
-#[derive(Clone, Debug)]
-pub struct DirectoryEntryPlus {
     /// Name of the entry.
     pub name: OsString,
     /// Cache time-to-live for the entry and its attributes.
     pub ttl: Duration,
     /// Attributes of the entry.
     pub attr: FileAttr,
+}
+
+/// A directory entry without attributes for the legacy FUSE readdir operation.
+#[cfg(feature = "legacy_readdir")]
+#[derive(Clone, Debug)]
+pub struct LegacyDirectoryEntry {
+    /// Name of the entry.
+    pub name: OsString,
+    /// Kind of file (directory, file, pipe, etc.).
+    pub kind: crate::FileType,
 }
 
 /// Filesystem statistics.
@@ -124,24 +126,36 @@ pub enum Xattr {
 }
 
 #[cfg(target_os = "macos")]
+/// Extended timestamps available on macOS.
 #[derive(Clone, Debug)]
 pub struct XTimes {
+    /// Time of the last backup.
     pub bkuptime: SystemTime,
+    /// Time of creation.
     pub crtime: SystemTime,
 }
 
+/// Result for operations that return no data.
 pub type ResultEmpty = std::io::Result<()>;
+/// Result containing the cache duration and attributes of an entry.
 pub type ResultEntry = std::io::Result<(Duration, FileAttr)>;
+/// Result containing a file handle and FUSE open response flags.
 pub type ResultOpen = std::io::Result<(u64, u32)>;
-pub type ResultReaddir = std::io::Result<Vec<DirectoryEntry>>;
+/// Result containing an owned byte buffer.
 pub type ResultData = std::io::Result<Vec<u8>>;
+/// Result containing a borrowed byte slice.
 pub type ResultSlice<'a> = std::io::Result<&'a [u8]>;
+/// Result containing the number of bytes written.
 pub type ResultWrite = std::io::Result<u32>;
+/// Result containing filesystem statistics.
 pub type ResultStatfs = std::io::Result<Statfs>;
+/// Result containing a newly created and opened entry.
 pub type ResultCreate = std::io::Result<CreatedEntry>;
+/// Result containing extended attribute data or its required size.
 pub type ResultXattr = std::io::Result<Xattr>;
 
 #[cfg(target_os = "macos")]
+/// Result containing extended macOS timestamps.
 pub type ResultXTimes = std::io::Result<XTimes>;
 
 /// Dummy struct returned by the callback in the `read()` method. Cannot be constructed outside
@@ -223,7 +237,9 @@ impl EntryName {
 /// Resolved is used when the inode table already has an inode for the entry.
 #[derive(Debug, Clone)]
 pub enum EntryRef {
+    /// Entry identified by a parent path and name before inode resolution.
     Lookup(EntryName),
+    /// Entry whose inode has already been resolved.
     Resolved(ResolvedPath),
 }
 
@@ -617,28 +633,33 @@ pub trait Filesystem {
         enosys_error()
     }
 
-    /// Get the entries of a directory.
+    /// Gets directory entries together with their attributes.
     ///
     /// * `path`: path to the directory.
     /// * `fh`: file handle returned from the `opendir` call.
     ///
-    /// Return all the entries of the directory.
-    fn readdir(&self, req: RequestInfo, path: &ResolvedPath, fh: u64) -> ResultReaddir {
-        enosys_error()
-    }
-
-    /// Gets directory entries together with their attributes.
-    ///
     /// Results are produced in batches and retained by FuserNG until releasedir, allowing
     /// offsets previously returned to FUSE to be revisited.
-    ///
-    /// The target filesystem must request the desired READDIRPLUS capability during init.
-    fn readdirplus(
+    fn readdir(
         &self,
         req: RequestInfo,
         path: &ResolvedPath,
         fh: u64,
-    ) -> impl Iterator<Item = std::io::Result<Vec<DirectoryEntryPlus>>> + Send + 'static {
+    ) -> impl Iterator<Item = std::io::Result<Vec<DirectoryEntry>>> + Send + 'static {
+        std::iter::once(enosys_error())
+    }
+
+    /// Gets directory entries without attributes for the legacy FUSE readdir operation.
+    ///
+    /// Results are produced in batches and retained by FuserNG until releasedir, allowing
+    /// offsets previously returned to FUSE to be revisited.
+    #[cfg(feature = "legacy_readdir")]
+    fn legacy_readdir(
+        &self,
+        req: RequestInfo,
+        path: &ResolvedPath,
+        fh: u64,
+    ) -> impl Iterator<Item = std::io::Result<Vec<LegacyDirectoryEntry>>> + Send + 'static {
         std::iter::once(enosys_error())
     }
 

@@ -3,13 +3,14 @@
 ![Cargo Checks](https://github.com/francois-nt/fuser-ng/actions/workflows/cargo-test.yml/badge.svg)
 
 `fuser-ng` is a higher-level, path-oriented FUSE filesystem library for Rust,
-built on top of [`fuser`](https://github.com/cberner/fuser) 0.17.
+built on top of [`fuser`](https://github.com/cberner/fuser) 0.18.
 
 It started as a fork of `fuse-mt`. The 0.7 series moved the crate to `fuser`
 0.17, uses fuser's native threading instead of an internal thread pool, and
 adds a new inode table that keeps descendant paths correct when a parent
 directory is renamed. Version 0.8 refines the public path API for inode-aware
-`getattr` and `create` callbacks.
+`getattr` and `create` callbacks and adds an optional asynchronous filesystem
+interface. Version 0.9 adds streaming directory reads.
 
 ## Overview
 
@@ -23,8 +24,10 @@ The crate:
 * lets `Filesystem` methods return `std::io::Result` values instead of using
   fuser reply objects directly;
 * provides default `ENOSYS` implementations for operations you do not support;
-* simplifies `readdir` by handling FUSE pagination internally;
+* streams directory entries in batches while handling FUSE pagination
+  internally;
 * uses fuser's threaded event loop, configurable with `ThreadCount`;
+* optionally supports asynchronous filesystem implementations through Tokio;
 * adds broader unit and integration test coverage than the original `fuse-mt`
   codebase, including inode-table rename cases and passthrough FUSE operations.
 
@@ -54,7 +57,7 @@ Add the crate to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-fuser-ng = "0.8"
+fuser-ng = "0.9"
 ```
 
 Implement `fuser_ng::Filesystem`, then wrap it before mounting:
@@ -89,9 +92,9 @@ cargo clippy --workspace --tests
 
 ## Status
 
-This crate is a work in progress. Version 0.8 is a breaking update from 0.7
-for the `Filesystem::getattr` and `Filesystem::create` callback signatures.
-Bug reports, pull requests, and feedback are welcome.
+This crate is a work in progress. Version 0.9 introduces a streaming directory
+API for synchronous and asynchronous filesystem implementations. Bug reports,
+pull requests, and feedback are welcome.
 
 ## License
 

@@ -569,26 +569,26 @@ fn exercise_passthrough(binary: &str, features: Option<&str>) -> io::Result<()> 
 }
 
 #[test]
-fn passthrough_exercises_fuse_methods_with_readdir() -> io::Result<()> {
+fn passthrough_exercises_fuse_methods_with_modern_readdir() -> io::Result<()> {
     exercise_passthrough("passthrufs", None)
 }
 
 #[test]
-fn passthrough_exercises_fuse_methods_with_readdirplus() -> io::Result<()> {
-    exercise_passthrough("passthrufs", Some("passthrufs/readdirplus"))
+fn passthrough_exercises_fuse_methods_with_legacy_readdir() -> io::Result<()> {
+    exercise_passthrough("passthrufs", Some("passthrufs/legacy_readdir"))
 }
 
 #[cfg(feature = "async")]
 #[test]
-fn async_passthrough_exercises_fuse_methods_with_readdir() -> io::Result<()> {
+fn async_passthrough_exercises_fuse_methods_with_modern_readdir() -> io::Result<()> {
     exercise_passthrough("async-passthrough", Some("passthrufs/async"))
 }
 
 #[cfg(feature = "async")]
 #[test]
-fn async_passthrough_exercises_fuse_methods_with_readdirplus() -> io::Result<()> {
+fn async_passthrough_exercises_fuse_methods_with_legacy_readdir() -> io::Result<()> {
     exercise_passthrough(
         "async-passthrough",
-        Some("passthrufs/async,passthrufs/readdirplus"),
+        Some("passthrufs/async,passthrufs/legacy_readdir"),
     )
 }
