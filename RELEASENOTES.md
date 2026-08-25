@@ -2,7 +2,8 @@ v0.9.0: 2026-08-25
   * Breaking change: `Filesystem::readdir` now returns directory entries incrementally as an iterator of result batches instead of collecting the complete directory in a single result.
   * Breaking change: `AsyncFilesystem::readdir` now returns a stream of result batches instead of a future containing the complete directory.
   * Breaking change: `DirectoryEntry` now contains the entry attributes and their cache duration in addition to its name.
-  * Remove the non-streaming `ResultReaddir` alias.
+  * Replace the non-streaming `ResultReaddir` alias with `ResultReaddirBatch`, the result type yielded for each batch.
+  * Allow existing implementations to migrate incrementally by wrapping a complete directory result in `std::iter::once` before producing smaller batches.
   * Retain the directory entries seen for each open handle so `seekdir`, `telldir`, and `rewinddir` continue to work across streamed batches.
   * Request `FUSE_DO_READDIRPLUS` by default and serve the low-level FUSE `readdir` operation from the attribute-bearing target stream without adding lookup references.
   * Add the optional `legacy_readdir` feature with a separate attribute-free streaming interface for serving the low-level FUSE `readdir` operation directly.

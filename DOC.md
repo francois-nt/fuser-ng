@@ -84,6 +84,23 @@ The adapter consumes batches as reply space becomes available and handles
 directory offsets internally. `AsyncFilesystem::readdir` provides the same
 model through an asynchronous `Stream`.
 
+### Migrating from 0.8
+
+Replace the former `ResultReaddir` return value with an iterator whose items
+are `ResultReaddirBatch` values. An implementation that still builds the
+complete directory can initially wrap that result without changing its
+internal logic:
+
+```rust,ignore
+let batch: fuser_ng::ResultReaddirBatch = read_all_entries();
+std::iter::once(batch)
+```
+
+Each `DirectoryEntry` must now provide `ttl` and `attr`. Implementations can
+then move from one complete batch to smaller batches as entries become
+available. Asynchronous implementations perform the same conversion but yield
+the batches through a `Stream`.
+
 ## Asynchronous filesystems
 
 Asynchronous support is opt-in. Enable the `async` feature and provide Tokio

@@ -10,12 +10,13 @@ use std::time::SystemTime;
 use futures_core::Stream;
 
 use crate::{
-    DirectoryEntry, EntryName, EntryRef, KernelConfig, RequestInfo, ResolvedPath, ResultCreate,
-    ResultData, ResultEmpty, ResultEntry, ResultOpen, ResultStatfs, ResultWrite, ResultXattr,
+    EntryName, EntryRef, KernelConfig, RequestInfo, ResolvedPath, ResultCreate, ResultData,
+    ResultEmpty, ResultEntry, ResultOpen, ResultReaddirBatch, ResultStatfs, ResultWrite,
+    ResultXattr,
 };
 
 #[cfg(feature = "legacy_readdir")]
-use crate::LegacyDirectoryEntry;
+use crate::ResultLegacyReaddirBatch;
 
 #[cfg(target_os = "macos")]
 use crate::ResultXTimes;
@@ -232,7 +233,7 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         _req: RequestInfo,
         _path: ResolvedPath,
         _fh: u64,
-    ) -> impl Stream<Item = std::io::Result<Vec<DirectoryEntry>>> + Send + 'static {
+    ) -> impl Stream<Item = ResultReaddirBatch> + Send + 'static {
         Once(Some(Err(std::io::Error::from_raw_os_error(libc::ENOSYS))))
     }
 
@@ -243,7 +244,7 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         _req: RequestInfo,
         _path: ResolvedPath,
         _fh: u64,
-    ) -> impl Stream<Item = std::io::Result<Vec<LegacyDirectoryEntry>>> + Send + 'static {
+    ) -> impl Stream<Item = ResultLegacyReaddirBatch> + Send + 'static {
         Once(Some(Err(std::io::Error::from_raw_os_error(libc::ENOSYS))))
     }
 

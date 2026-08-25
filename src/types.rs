@@ -143,6 +143,11 @@ pub type ResultEntry = std::io::Result<(Duration, FileAttr)>;
 pub type ResultOpen = std::io::Result<(u64, u32)>;
 /// Result containing an owned byte buffer.
 pub type ResultData = std::io::Result<Vec<u8>>;
+/// Result containing one batch of directory entries and their attributes.
+pub type ResultReaddirBatch = std::io::Result<Vec<DirectoryEntry>>;
+#[cfg(feature = "legacy_readdir")]
+/// Result containing one batch of legacy directory entries without attributes.
+pub type ResultLegacyReaddirBatch = std::io::Result<Vec<LegacyDirectoryEntry>>;
 /// Result containing a borrowed byte slice.
 pub type ResultSlice<'a> = std::io::Result<&'a [u8]>;
 /// Result containing the number of bytes written.
@@ -645,7 +650,7 @@ pub trait Filesystem {
         req: RequestInfo,
         path: &ResolvedPath,
         fh: u64,
-    ) -> impl Iterator<Item = std::io::Result<Vec<DirectoryEntry>>> + Send + 'static {
+    ) -> impl Iterator<Item = ResultReaddirBatch> + Send + 'static {
         std::iter::once(enosys_error())
     }
 
@@ -659,7 +664,7 @@ pub trait Filesystem {
         req: RequestInfo,
         path: &ResolvedPath,
         fh: u64,
-    ) -> impl Iterator<Item = std::io::Result<Vec<LegacyDirectoryEntry>>> + Send + 'static {
+    ) -> impl Iterator<Item = ResultLegacyReaddirBatch> + Send + 'static {
         std::iter::once(enosys_error())
     }
 

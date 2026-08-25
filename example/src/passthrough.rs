@@ -229,7 +229,7 @@ impl Filesystem for PassthroughFS {
         _req: RequestInfo,
         path: &ResolvedPath,
         fh: u64,
-    ) -> impl Iterator<Item = io::Result<Vec<LegacyDirectoryEntry>>> + Send + 'static {
+    ) -> impl Iterator<Item = ResultLegacyReaddirBatch> + Send + 'static {
         debug!("legacy_readdir: {:?}", path);
         let filesystem = self.clone();
         let path = path.full_path();
@@ -311,7 +311,7 @@ impl Filesystem for PassthroughFS {
         _req: RequestInfo,
         path: &ResolvedPath,
         fh: u64,
-    ) -> impl Iterator<Item = io::Result<Vec<DirectoryEntry>>> + Send + 'static {
+    ) -> impl Iterator<Item = ResultReaddirBatch> + Send + 'static {
         debug!("readdir: {:?}", path);
         let filesystem = self.clone();
         let path = path.full_path();
