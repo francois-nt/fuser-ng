@@ -60,15 +60,19 @@ struct PassthroughProcess {
 
 impl Drop for PassthroughProcess {
     fn drop(&mut self) {
-        let _ = Command::new("fusermount3")
-            .arg("-u")
-            .arg(&self.mountpoint)
-            .status();
-        let _ = Command::new("fusermount")
-            .arg("-u")
-            .arg(&self.mountpoint)
-            .status();
-        let _ = Command::new("umount").arg(&self.mountpoint).status();
+        let _ = [
+            ("fusermount3", Some("-u")),
+            ("fusermount", Some("-u")),
+            ("umount", None),
+        ]
+        .into_iter()
+        .any(|(program, option)| {
+            Command::new(program)
+                .args(option)
+                .arg(&self.mountpoint)
+                .status()
+                .is_ok_and(|status| status.success())
+        });
 
         for _ in 0..20 {
             if matches!(self.child.try_wait(), Ok(Some(_))) {
