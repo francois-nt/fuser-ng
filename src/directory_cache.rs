@@ -26,6 +26,20 @@ pub(crate) struct DirectoryCache {
     entries: HashMap<u64, DirectoryCacheEntry>,
 }
 
+/// Returns a cached file handle or replies with an error and exits the current operation.
+macro_rules! real_fh_or_reply_error {
+    ($p:expr, $reply:expr) => {
+        match $p {
+            Some(value) => value,
+            _ => {
+                $reply.error(Errno::EINVAL);
+                return;
+            }
+        }
+    };
+}
+pub(crate) use real_fh_or_reply_error;
+
 impl DirectoryCache {
     pub(crate) fn new() -> DirectoryCache {
         DirectoryCache {
@@ -43,15 +57,14 @@ impl DirectoryCache {
         key
     }
 
-    /// Get the real file handle (the one set by the filesystem) for a given cache entry key.
-    /// Panics if there is no such key.
-    pub(crate) fn real_fh(&self, key: u64) -> u64 {
-        self.entries
-            .get(&key)
-            .unwrap_or_else(|| {
-                panic!("no such directory cache key {}", key);
-            })
-            .fh
+    /// Returns the filesystem file handle associated with a cache entry key.
+    ///
+    /// Returns None if the key does not exist.
+    pub(crate) fn real_fh(&self, key: u64) -> Option<u64> {
+        self.entries.get(&key).map(|v| v.fh).or_else(|| {
+            log::error!("no real fh found for {key}!");
+            None
+        })
     }
 
     /// Delete the cache entry with the given key.
@@ -144,7 +157,14 @@ mod tests {
         let second = cache.new_entry(0);
 
         assert_ne!(first, second);
-        assert_eq!(cache.real_fh(first), 0);
-        assert_eq!(cache.real_fh(second), 0);
+        assert_eq!(cache.real_fh(first), Some(0));
+        assert_eq!(cache.real_fh(second), Some(0));
+    }
+
+    #[test]
+    fn missing_cache_key_has_no_real_handle() {
+        let cache = DirectoryCache::new();
+
+        assert_eq!(cache.real_fh(1), None);
     }
 }

@@ -160,7 +160,7 @@ impl<T: Filesystem + Sync + Send + 'static> FuserNG<T> {
     fn lookup(&self, ino: u64) {
         self.table.lookup(ino);
     }
-    fn forget(&self, ino: INodeNo, n: u64) -> u64 {
+    fn forget(&self, ino: INodeNo, n: u64) -> Option<u64> {
         self.table.forget(ino.0, n)
     }
     fn add_leaf(&self, parent: INodeNo, name: &OsStr) -> Option<(u64, u64)> {
@@ -539,7 +539,13 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
     }
 
     fn forget(&self, _req: &fuser::Request, ino: INodeNo, nlookup: u64) {
-        let lookups = self.forget(ino, nlookup);
+        let lookups = match self.forget(ino, nlookup) {
+            Some(value) => value,
+            _ => {
+                log::error!("catastrophic error in forget");
+                return;
+            }
+        };
         let path = self.get_path(ino).unwrap_or_else(|| {
             EntryName::new(
                 Arc::new(PathBuf::from(OsStr::new(""))).into(),
@@ -796,7 +802,12 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         debug!("rename: {:?} -> {:?}", entry, new_entry);
         match self.target.rename(req.info(), &entry, &new_entry) {
             Ok(()) => {
-                self.inode_rename(parent, name, newparent, newname);
+                if self
+                    .inode_rename(parent, name, newparent, newname)
+                    .is_none()
+                {
+                    log::error!("inode rename {parent} {:?} {newparent} {:?}", name, newname);
+                }
                 reply.ok()
             }
             Err(e) => reply.error(e.into()),
@@ -1008,7 +1019,10 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
             };
             let mut slot = slot.lock().unwrap();
             if slot.is_none() {
-                let real_fh = self.directory_cache.read().unwrap().real_fh(fh.0);
+                let real_fh = real_fh_or_reply_error!(
+                    self.directory_cache.read().unwrap().real_fh(fh.0),
+                    reply
+                );
                 let producer = self.target.legacy_readdir(req.info(), &path, real_fh);
                 *slot = Some(ReaddirState::new(Box::new(producer)));
             }
@@ -1035,7 +1049,10 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
             };
             let mut slot = slot.lock().unwrap();
             if slot.is_none() {
-                let real_fh = self.directory_cache.read().unwrap().real_fh(fh.0);
+                let real_fh = real_fh_or_reply_error!(
+                    self.directory_cache.read().unwrap().real_fh(fh.0),
+                    reply
+                );
                 let producer = self.target.readdir(req.info(), &path, real_fh);
                 *slot = Some(ReaddirState::new(Box::new(producer)));
             }
@@ -1086,7 +1103,8 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         let mut slot = slot.lock().unwrap();
 
         if slot.is_none() {
-            let real_fh = self.directory_cache.read().unwrap().real_fh(fh.0);
+            let real_fh =
+                real_fh_or_reply_error!(self.directory_cache.read().unwrap().real_fh(fh.0), reply);
             let producer = self.target.readdir(req.info(), &path, real_fh);
             *slot = Some(ReaddirState::new(Box::new(producer)));
         }
@@ -1115,7 +1133,8 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
     ) {
         let path = get_resolved_path!(self, ino, reply);
         debug!("releasedir: {:?}", path);
-        let real_fh = self.directory_cache.read().unwrap().real_fh(fh.0);
+        let real_fh =
+            real_fh_or_reply_error!(self.directory_cache.read().unwrap().real_fh(fh.0), reply);
         match self
             .target
             .releasedir(req.info(), &path, real_fh, flags.0 as u32)
@@ -1139,7 +1158,8 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
     ) {
         let path = get_resolved_path!(self, ino, reply);
         debug!("fsyncdir: {:?} (datasync: {:?})", path, datasync);
-        let real_fh = self.directory_cache.read().unwrap().real_fh(fh.0);
+        let real_fh =
+            real_fh_or_reply_error!(self.directory_cache.read().unwrap().real_fh(fh.0), reply);
         match self.target.fsyncdir(req.info(), &path, real_fh, datasync) {
             Ok(()) => reply.ok(),
             Err(e) => reply.error(e.into()),

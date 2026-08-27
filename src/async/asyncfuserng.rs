@@ -15,7 +15,7 @@ use futures_core::Stream;
 
 use super::AsyncFilesystem;
 use crate::FileType;
-use crate::directory_cache::{DirectoryCache, ReaddirCache, ReaddirState};
+use crate::directory_cache::{DirectoryCache, ReaddirCache, ReaddirState, real_fh_or_reply_error};
 use crate::inode_table::{InodeTable, InodeToPath};
 use crate::types::*;
 
@@ -137,7 +137,7 @@ impl<T> AsyncFuserNGInner<T> {
         self.table.lookup(ino);
     }
 
-    fn forget(&self, ino: INodeNo, count: u64) -> u64 {
+    fn forget(&self, ino: INodeNo, count: u64) -> Option<u64> {
         self.table.forget(ino.0, count)
     }
 
@@ -558,7 +558,14 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
     }
 
     fn forget(&self, _req: &fuser::Request, ino: INodeNo, nlookup: u64) {
-        let lookups = self.inner.forget(ino, nlookup);
+        let lookups = match self.inner.forget(ino, nlookup) {
+            Some(value) => value,
+            _ => {
+                log::error!("catastrophic error in forget");
+                return;
+            }
+        };
+
         let path = self.inner.get_path(ino).unwrap_or_else(|| {
             EntryName::new(
                 Arc::new(PathBuf::from(OsStr::new(""))).into(),
@@ -861,7 +868,12 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
         self.spawn(async move {
             match inner.target.rename(req, entry, new_entry).await {
                 Ok(()) => {
-                    inner.inode_rename(parent, &name, newparent, &newname);
+                    if inner
+                        .inode_rename(parent, &name, newparent, &newname)
+                        .is_none()
+                    {
+                        log::error!("inode rename {parent} {:?} {newparent} {:?}", name, newname);
+                    }
                     reply.ok();
                 }
                 Err(error) => reply.error(error.into()),
@@ -1119,7 +1131,10 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
                 };
                 let mut slot = slot.lock().await;
                 if slot.is_none() {
-                    let real_fh = inner.directory_cache.read().unwrap().real_fh(fh.0);
+                    let real_fh = real_fh_or_reply_error!(
+                        inner.directory_cache.read().unwrap().real_fh(fh.0),
+                        reply
+                    );
                     let producer = inner.target.legacy_readdir(req, path, real_fh);
                     *slot = Some(ReaddirState::new(Box::pin(producer)));
                 }
@@ -1136,7 +1151,10 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
                 };
                 let mut slot = slot.lock().await;
                 if slot.is_none() {
-                    let real_fh = inner.directory_cache.read().unwrap().real_fh(fh.0);
+                    let real_fh = real_fh_or_reply_error!(
+                        inner.directory_cache.read().unwrap().real_fh(fh.0),
+                        reply
+                    );
                     let producer = inner.target.readdir(req, path, real_fh);
                     *slot = Some(ReaddirState::new(Box::pin(producer)));
                 }
@@ -1187,7 +1205,10 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
         self.spawn(async move {
             let mut slot = slot.lock().await;
             if slot.is_none() {
-                let real_fh = inner.directory_cache.read().unwrap().real_fh(fh.0);
+                let real_fh = real_fh_or_reply_error!(
+                    inner.directory_cache.read().unwrap().real_fh(fh.0),
+                    reply
+                );
                 let producer = inner.target.readdir(req, path, real_fh);
                 *slot = Some(ReaddirState::new(Box::pin(producer)));
             }
@@ -1213,7 +1234,8 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
     ) {
         let inner = Arc::clone(&self.inner);
         let path = get_resolved_path!(inner, ino, reply);
-        let real_fh = inner.directory_cache.read().unwrap().real_fh(fh.0);
+        let real_fh =
+            real_fh_or_reply_error!(inner.directory_cache.read().unwrap().real_fh(fh.0), reply);
         let req = req.info();
         debug!("releasedir: {:?}", path);
 
@@ -1243,7 +1265,8 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
     ) {
         let inner = Arc::clone(&self.inner);
         let path = get_resolved_path!(inner, ino, reply);
-        let real_fh = inner.directory_cache.read().unwrap().real_fh(fh.0);
+        let real_fh =
+            real_fh_or_reply_error!(inner.directory_cache.read().unwrap().real_fh(fh.0), reply);
         let req = req.info();
         debug!("fsyncdir: {:?} (datasync: {:?})", path, datasync);
 

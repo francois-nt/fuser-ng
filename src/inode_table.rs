@@ -18,7 +18,7 @@ pub(crate) trait InodeToPath: std::fmt::Debug {
     fn add_or_get_leaf(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
     fn add_or_get_dir(&self, parent: Inode, name: &OsStr) -> Option<(Inode, Generation)>;
     fn create_or_get_leaf(&self, parent: Inode, name: &OsStr) -> Option<(bool, Inode, Generation)>;
-    fn forget(&self, inode: Inode, n: LookupCount) -> LookupCount;
+    fn forget(&self, inode: Inode, n: LookupCount) -> Option<LookupCount>;
     fn get_path(&self, inode: Inode) -> Option<EntryName>;
     fn resolve_from_parent(&self, parent: Inode, name: OsString) -> Option<EntryName> {
         let parent = self.get_folder_path(parent)?;
@@ -26,7 +26,7 @@ pub(crate) trait InodeToPath: std::fmt::Debug {
     }
     fn get_folder_path(&self, inode: Inode) -> Option<FolderPath>;
     fn get_parent_inode(&self, ino: Inode) -> Option<Inode>;
-    fn lookup(&self, inode: Inode);
+    fn lookup(&self, inode: Inode) -> Option<()>;
     fn rename(
         &self,
         oldparent: Inode,
@@ -588,19 +588,27 @@ impl InodeToPath for InodeTable {
         })
     }
 
-    fn forget(&self, inode: Inode, n: LookupCount) -> LookupCount {
+    fn forget(&self, inode: Inode, n: LookupCount) -> Option<LookupCount> {
         if inode == 1 {
-            return 1;
+            return Some(1);
         }
         self.access_write(|inner| {
-            let idx = inode as usize - 1;
-            let entry = &mut inner.table[idx];
-            assert!(!matches!(entry.entry, Entry::Vacant));
-            assert!(n <= entry.lookups);
-            entry.lookups -= n;
-            let lookups = entry.lookups;
-            inner.maybe_free_inode(idx);
-            lookups
+            let idx = (inode as usize).checked_sub(1)?;
+            let entry = inner.table.get_mut(idx)?;
+            if !matches!(entry.entry, Entry::Vacant) && n <= entry.lookups {
+                entry.lookups -= n;
+                let lookups = entry.lookups;
+                inner.maybe_free_inode(idx);
+                Some(lookups)
+            } else {
+                if matches!(entry.entry, Entry::Vacant) {
+                    log::error!("forget : vacant entry {:?} for inode {inode}", entry.entry);
+                } else {
+                    log::error!("forget : n is above total lookups {n} {}", entry.lookups);
+                }
+
+                None
+            }
         })
     }
 
@@ -629,14 +637,19 @@ impl InodeToPath for InodeTable {
         })
     }
 
-    fn lookup(&self, inode: Inode) {
+    fn lookup(&self, inode: Inode) -> Option<()> {
         if inode == 1 {
-            return;
+            return Some(());
         }
         self.access_write(|inner| {
-            let entry = &mut inner.table[inode as usize - 1];
-            assert!(!matches!(entry.entry, Entry::Vacant));
+            let entry = inner.table.get_mut((inode as usize).checked_sub(1)?)?;
+            if matches!(entry.entry, Entry::Vacant) {
+                log::error!("lookup : vacant entry {:?} for inode {inode}", entry);
+                return None;
+            }
+
             entry.lookups += 1;
+            Some(())
         })
     }
 
@@ -874,7 +887,7 @@ mod tests {
         assert_ne!(1, inode2);
         assert_path(&table, inode2, "/b");
 
-        assert_eq!(0, table.forget(inode1, 1));
+        assert_eq!(Some(0), table.forget(inode1, 1));
         assert!(table.get_path(inode1).is_none());
 
         let (inode3, generation3) = table.add_leaf(1, name("c")).unwrap();
@@ -884,13 +897,43 @@ mod tests {
     }
 
     #[test]
+    fn invalid_inode_operations_return_none() {
+        let table = InodeTable::new();
+
+        assert_eq!(None, table.lookup(0));
+        assert_eq!(None, table.lookup(u64::MAX));
+        assert_eq!(None, table.forget(0, 1));
+        assert_eq!(None, table.forget(u64::MAX, 1));
+    }
+
+    #[test]
+    fn vacant_inode_operations_return_none() {
+        let table = InodeTable::new();
+        let (inode, _) = table.add_leaf(1, name("a")).unwrap();
+
+        table.unlink(1, name("a"));
+        assert_eq!(Some(0), table.forget(inode, 1));
+        assert_eq!(None, table.lookup(inode));
+        assert_eq!(None, table.forget(inode, 1));
+    }
+
+    #[test]
+    fn forget_rejects_excessive_lookup_count() {
+        let table = InodeTable::new();
+        let (inode, _) = table.add_leaf(1, name("a")).unwrap();
+
+        assert_eq!(None, table.forget(inode, 2));
+        assert_eq!(Some(0), table.forget(inode, 1));
+    }
+
+    #[test]
     fn add_or_get_returns_existing_inode_without_lookup() {
         let table = InodeTable::new();
 
         let (inode1, generation1) = table.add_or_get_leaf(1, name("a")).unwrap();
         assert_eq!(0, generation1);
         assert_path(&table, inode1, "/a");
-        table.lookup(inode1);
+        assert_eq!(Some(()), table.lookup(inode1));
 
         let (inode2, generation2) = table.add_leaf(1, name("b")).unwrap();
         assert_path(&table, inode2, "/b");
@@ -898,10 +941,10 @@ mod tests {
         let (inode2_again, generation2_again) = table.add_or_get_leaf(1, name("b")).unwrap();
         assert_eq!(inode2, inode2_again);
         assert_eq!(generation2, generation2_again);
-        table.lookup(inode2);
+        assert_eq!(Some(()), table.lookup(inode2));
 
-        assert_eq!(0, table.forget(inode1, 1));
-        assert_eq!(1, table.forget(inode2, 1));
+        assert_eq!(Some(0), table.forget(inode1, 1));
+        assert_eq!(Some(1), table.forget(inode2, 1));
     }
 
     #[test]
@@ -912,7 +955,7 @@ mod tests {
         assert!(created);
         assert_eq!(0, generation);
         assert_path(&table, inode, "/a");
-        assert_eq!(0, table.forget(inode, 1));
+        assert_eq!(Some(0), table.forget(inode, 1));
         assert_no_path(&table, inode);
 
         let (existing, existing_generation) = table.add_leaf(1, name("b")).unwrap();
@@ -921,7 +964,7 @@ mod tests {
         assert!(!created_again);
         assert_eq!(existing, same);
         assert_eq!(existing_generation, same_generation);
-        assert_eq!(0, table.forget(existing, 1));
+        assert_eq!(Some(0), table.forget(existing, 1));
     }
 
     #[test]
@@ -951,7 +994,7 @@ mod tests {
         let (new_inode, _) = table.add_or_get_leaf(1, name("bar")).unwrap();
         assert_ne!(inode, new_inode);
 
-        assert_eq!(0, table.forget(inode, 1));
+        assert_eq!(Some(0), table.forget(inode, 1));
         assert!(table.get_path(inode).is_none());
         assert_path(&table, new_inode, "/bar");
     }
@@ -1040,11 +1083,11 @@ mod tests {
         let (new_dir, _) = table.add_or_get_dir(1, name("dir")).unwrap();
         assert_ne!(dir, new_dir);
 
-        assert_eq!(0, table.forget(dir, 1));
+        assert_eq!(Some(0), table.forget(dir, 1));
         assert_path(&table, dir, "/dir");
-        assert_eq!(0, table.forget(child_dir, 1));
+        assert_eq!(Some(0), table.forget(child_dir, 1));
         assert_path(&table, child_dir, "/dir/child");
-        assert_eq!(0, table.forget(leaf, 1));
+        assert_eq!(Some(0), table.forget(leaf, 1));
 
         assert_no_path(&table, dir);
         assert_no_path(&table, child_dir);
@@ -1099,11 +1142,11 @@ mod tests {
         let (dir, _) = table.add_dir(1, name("dir")).unwrap();
         let (child, _) = table.add_leaf(dir, name("child")).unwrap();
 
-        assert_eq!(0, table.forget(dir, 1));
+        assert_eq!(Some(0), table.forget(dir, 1));
         assert_path(&table, dir, "/dir");
         assert_path(&table, child, "/dir/child");
 
-        assert_eq!(0, table.forget(child, 1));
+        assert_eq!(Some(0), table.forget(child, 1));
         assert!(table.get_path(child).is_none());
         assert!(table.get_path(dir).is_none());
     }
@@ -1206,7 +1249,7 @@ mod tests {
         assert_eq!(moved, live_inode);
         assert_eq!(moved_generation, live_generation);
 
-        assert_eq!(0, table.forget(replaced, 1));
+        assert_eq!(Some(0), table.forget(replaced, 1));
         assert!(table.get_path(replaced).is_none());
     }
 }
