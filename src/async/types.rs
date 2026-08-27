@@ -32,15 +32,23 @@ impl<T: Unpin> Stream for Once<T> {
     }
 }
 
+/// Returns an immediately ready unsupported-operation result.
+fn enosys_future<T>() -> std::future::Ready<std::io::Result<T>> {
+    std::future::ready(Err(std::io::Error::from_raw_os_error(libc::ENOSYS)))
+}
+
 /// Filesystem operations that may complete asynchronously.
 ///
 /// Operation arguments are owned so their futures can outlive the FUSE request callback.
+#[allow(unused_variables)]
 pub trait AsyncFilesystem: Send + Sync + 'static {
     /// Configures the FUSE connection before requests are dispatched.
-    fn init(&self, req: RequestInfo, config: &mut KernelConfig) -> ResultEmpty;
+    fn init(&self, req: RequestInfo, config: &mut KernelConfig) -> ResultEmpty {
+        Ok(())
+    }
 
     /// Cleans up the filesystem during unmount.
-    fn destroy(&self);
+    fn destroy(&self) {}
 
     /// Gets the attributes of a filesystem entry.
     fn getattr(
@@ -48,7 +56,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         req: RequestInfo,
         path: EntryRef,
         fh: Option<u64>,
-    ) -> impl Future<Output = ResultEntry> + Send;
+    ) -> impl Future<Output = ResultEntry> + Send {
+        enosys_future()
+    }
 
     /// Changes the mode of a filesystem entry.
     fn chmod(
@@ -57,7 +67,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         path: ResolvedPath,
         fh: Option<u64>,
         mode: u32,
-    ) -> impl Future<Output = ResultEmpty> + Send;
+    ) -> impl Future<Output = ResultEmpty> + Send {
+        enosys_future()
+    }
 
     /// Changes the owner UID and/or group GID of a filesystem entry.
     fn chown(
@@ -67,7 +79,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         fh: Option<u64>,
         uid: Option<u32>,
         gid: Option<u32>,
-    ) -> impl Future<Output = ResultEmpty> + Send;
+    ) -> impl Future<Output = ResultEmpty> + Send {
+        enosys_future()
+    }
 
     /// Sets the length of a file.
     fn truncate(
@@ -76,7 +90,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         path: ResolvedPath,
         fh: Option<u64>,
         size: u64,
-    ) -> impl Future<Output = ResultEmpty> + Send;
+    ) -> impl Future<Output = ResultEmpty> + Send {
+        enosys_future()
+    }
 
     /// Sets the access and modification timestamps of an entry.
     fn utimens(
@@ -86,7 +102,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         fh: Option<u64>,
         atime: Option<SystemTime>,
         mtime: Option<SystemTime>,
-    ) -> impl Future<Output = ResultEmpty> + Send;
+    ) -> impl Future<Output = ResultEmpty> + Send {
+        enosys_future()
+    }
 
     /// Sets the macOS-specific timestamps and flags of an entry.
     #[allow(clippy::too_many_arguments)]
@@ -99,14 +117,18 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         chgtime: Option<SystemTime>,
         bkuptime: Option<SystemTime>,
         flags: Option<u32>,
-    ) -> impl Future<Output = ResultEmpty> + Send;
+    ) -> impl Future<Output = ResultEmpty> + Send {
+        enosys_future()
+    }
 
     /// Reads a symbolic link.
     fn readlink(
         &self,
         req: RequestInfo,
         path: ResolvedPath,
-    ) -> impl Future<Output = ResultData> + Send;
+    ) -> impl Future<Output = ResultData> + Send {
+        enosys_future()
+    }
 
     /// Creates a special file.
     fn mknod(
@@ -115,7 +137,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         entry: EntryName,
         mode: u32,
         rdev: u32,
-    ) -> impl Future<Output = ResultEntry> + Send;
+    ) -> impl Future<Output = ResultEntry> + Send {
+        enosys_future()
+    }
 
     /// Creates a directory.
     fn mkdir(
@@ -123,18 +147,27 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         req: RequestInfo,
         entry: EntryName,
         mode: u32,
-    ) -> impl Future<Output = ResultEntry> + Send;
+    ) -> impl Future<Output = ResultEntry> + Send {
+        enosys_future()
+    }
 
     /// Removes a file.
     fn unlink(
         &self,
         req: RequestInfo,
         entry: EntryName,
-    ) -> impl Future<Output = ResultEmpty> + Send;
+    ) -> impl Future<Output = ResultEmpty> + Send {
+        enosys_future()
+    }
 
     /// Removes a directory.
-    fn rmdir(&self, req: RequestInfo, entry: EntryName)
-    -> impl Future<Output = ResultEmpty> + Send;
+    fn rmdir(
+        &self,
+        req: RequestInfo,
+        entry: EntryName,
+    ) -> impl Future<Output = ResultEmpty> + Send {
+        enosys_future()
+    }
 
     /// Creates a symbolic link.
     fn symlink(
@@ -142,7 +175,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         req: RequestInfo,
         entry: EntryName,
         target: PathBuf,
-    ) -> impl Future<Output = ResultEntry> + Send;
+    ) -> impl Future<Output = ResultEntry> + Send {
+        enosys_future()
+    }
 
     /// Renames a filesystem entry.
     fn rename(
@@ -150,7 +185,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         req: RequestInfo,
         entry: EntryName,
         new_entry: EntryName,
-    ) -> impl Future<Output = ResultEmpty> + Send;
+    ) -> impl Future<Output = ResultEmpty> + Send {
+        enosys_future()
+    }
 
     /// Creates a hard link.
     fn link(
@@ -158,7 +195,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         req: RequestInfo,
         path: ResolvedPath,
         new_entry: EntryName,
-    ) -> impl Future<Output = ResultEntry> + Send;
+    ) -> impl Future<Output = ResultEntry> + Send {
+        enosys_future()
+    }
 
     /// Opens a file.
     fn open(
@@ -166,7 +205,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         req: RequestInfo,
         path: ResolvedPath,
         flags: u32,
-    ) -> impl Future<Output = ResultOpen> + Send;
+    ) -> impl Future<Output = ResultOpen> + Send {
+        enosys_future()
+    }
 
     /// Reads data from a file.
     fn read(
@@ -176,7 +217,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         fh: u64,
         offset: u64,
         size: u32,
-    ) -> impl Future<Output = ResultData> + Send;
+    ) -> impl Future<Output = ResultData> + Send {
+        enosys_future()
+    }
 
     /// Writes data to a file.
     fn write(
@@ -187,7 +230,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         offset: u64,
         data: Vec<u8>,
         flags: u32,
-    ) -> impl Future<Output = ResultWrite> + Send;
+    ) -> impl Future<Output = ResultWrite> + Send {
+        enosys_future()
+    }
 
     /// Flushes pending data for an open file.
     fn flush(
@@ -196,7 +241,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         path: ResolvedPath,
         fh: u64,
         lock_owner: u64,
-    ) -> impl Future<Output = ResultEmpty> + Send;
+    ) -> impl Future<Output = ResultEmpty> + Send {
+        enosys_future()
+    }
 
     /// Releases an open file.
     #[allow(clippy::too_many_arguments)]
@@ -208,7 +255,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         flags: u32,
         lock_owner: u64,
         flush: bool,
-    ) -> impl Future<Output = ResultEmpty> + Send;
+    ) -> impl Future<Output = ResultEmpty> + Send {
+        enosys_future()
+    }
 
     /// Synchronizes an open file with its backing storage.
     fn fsync(
@@ -217,7 +266,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         path: ResolvedPath,
         fh: u64,
         datasync: bool,
-    ) -> impl Future<Output = ResultEmpty> + Send;
+    ) -> impl Future<Output = ResultEmpty> + Send {
+        enosys_future()
+    }
 
     /// Opens a directory.
     fn opendir(
@@ -225,14 +276,16 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         req: RequestInfo,
         path: ResolvedPath,
         flags: u32,
-    ) -> impl Future<Output = ResultOpen> + Send;
+    ) -> impl Future<Output = ResultOpen> + Send {
+        enosys_future()
+    }
 
     /// Gets directory entries and attributes as an asynchronous stream of batches.
     fn readdir(
         &self,
-        _req: RequestInfo,
-        _path: ResolvedPath,
-        _fh: u64,
+        req: RequestInfo,
+        path: ResolvedPath,
+        fh: u64,
     ) -> impl Stream<Item = ResultReaddirBatch> + Send + 'static {
         Once(Some(Err(std::io::Error::from_raw_os_error(libc::ENOSYS))))
     }
@@ -241,9 +294,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
     #[cfg(feature = "legacy_readdir")]
     fn legacy_readdir(
         &self,
-        _req: RequestInfo,
-        _path: ResolvedPath,
-        _fh: u64,
+        req: RequestInfo,
+        path: ResolvedPath,
+        fh: u64,
     ) -> impl Stream<Item = ResultLegacyReaddirBatch> + Send + 'static {
         Once(Some(Err(std::io::Error::from_raw_os_error(libc::ENOSYS))))
     }
@@ -255,7 +308,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         path: ResolvedPath,
         fh: u64,
         flags: u32,
-    ) -> impl Future<Output = ResultEmpty> + Send;
+    ) -> impl Future<Output = ResultEmpty> + Send {
+        enosys_future()
+    }
 
     /// Synchronizes an open directory with its backing storage.
     fn fsyncdir(
@@ -264,14 +319,18 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         path: ResolvedPath,
         fh: u64,
         datasync: bool,
-    ) -> impl Future<Output = ResultEmpty> + Send;
+    ) -> impl Future<Output = ResultEmpty> + Send {
+        enosys_future()
+    }
 
     /// Gets filesystem statistics.
     fn statfs(
         &self,
         req: RequestInfo,
         path: ResolvedPath,
-    ) -> impl Future<Output = ResultStatfs> + Send;
+    ) -> impl Future<Output = ResultStatfs> + Send {
+        enosys_future()
+    }
 
     /// Sets an extended attribute.
     #[allow(clippy::too_many_arguments)]
@@ -283,7 +342,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         value: Vec<u8>,
         flags: u32,
         position: u32,
-    ) -> impl Future<Output = ResultEmpty> + Send;
+    ) -> impl Future<Output = ResultEmpty> + Send {
+        enosys_future()
+    }
 
     /// Gets an extended attribute.
     fn getxattr(
@@ -292,7 +353,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         path: ResolvedPath,
         name: OsString,
         size: u32,
-    ) -> impl Future<Output = ResultXattr> + Send;
+    ) -> impl Future<Output = ResultXattr> + Send {
+        enosys_future()
+    }
 
     /// Lists the extended attributes of an entry.
     fn listxattr(
@@ -300,7 +363,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         req: RequestInfo,
         path: ResolvedPath,
         size: u32,
-    ) -> impl Future<Output = ResultXattr> + Send;
+    ) -> impl Future<Output = ResultXattr> + Send {
+        enosys_future()
+    }
 
     /// Removes an extended attribute.
     fn removexattr(
@@ -308,7 +373,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         req: RequestInfo,
         path: ResolvedPath,
         name: OsString,
-    ) -> impl Future<Output = ResultEmpty> + Send;
+    ) -> impl Future<Output = ResultEmpty> + Send {
+        enosys_future()
+    }
 
     /// Checks whether an entry permits the requested access.
     fn access(
@@ -316,7 +383,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         req: RequestInfo,
         path: ResolvedPath,
         mask: u32,
-    ) -> impl Future<Output = ResultEmpty> + Send;
+    ) -> impl Future<Output = ResultEmpty> + Send {
+        enosys_future()
+    }
 
     /// Creates and opens a file.
     fn create(
@@ -325,7 +394,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         path: ResolvedPath,
         mode: u32,
         flags: u32,
-    ) -> impl Future<Output = ResultCreate> + Send;
+    ) -> impl Future<Output = ResultCreate> + Send {
+        enosys_future()
+    }
 
     /// Renames the volume on macOS.
     #[cfg(target_os = "macos")]
@@ -333,7 +404,9 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         &self,
         req: RequestInfo,
         name: OsString,
-    ) -> impl Future<Output = ResultEmpty> + Send;
+    ) -> impl Future<Output = ResultEmpty> + Send {
+        enosys_future()
+    }
 
     /// Gets the extended timestamps of an entry on macOS.
     #[cfg(target_os = "macos")]
@@ -341,5 +414,7 @@ pub trait AsyncFilesystem: Send + Sync + 'static {
         &self,
         req: RequestInfo,
         path: ResolvedPath,
-    ) -> impl Future<Output = ResultXTimes> + Send;
+    ) -> impl Future<Output = ResultXTimes> + Send {
+        enosys_future()
+    }
 }
