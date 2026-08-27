@@ -1,5 +1,9 @@
 #![doc = include_str!("../DOC.md")]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(
+    not(test),
+    deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
+)]
 
 // FuserNG -- A higher-level FUSE (Filesystem in Userspace) interface and wrapper around the
 // low-level `fuser`` library that makes implementing a filesystem a bit easier.
@@ -62,7 +66,7 @@ pub enum ThreadCount {
 impl ThreadCount {
     fn value(&self) -> usize {
         match self {
-            Self::Default => std::thread::available_parallelism().unwrap().into(),
+            Self::Default => std::thread::available_parallelism().map_or(1, |value| value.get()),
             Self::NumThreads(num_threads) => *num_threads,
         }
     }

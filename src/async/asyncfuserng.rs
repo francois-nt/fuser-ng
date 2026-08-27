@@ -1,8 +1,9 @@
+use parking_lot::RwLock;
 use std::ffi::{OsStr, OsString};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 #[cfg(not(feature = "legacy_readdir"))]
@@ -1077,17 +1078,15 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
         self.spawn(async move {
             match inner.target.opendir(req, path, flags.0 as u32).await {
                 Ok((fh, flags)) => {
-                    let cache_key = inner.directory_cache.write().unwrap().new_entry(fh);
+                    let cache_key = inner.directory_cache.write().new_entry(fh);
                     inner
                         .readdir_cache
                         .write()
-                        .unwrap()
                         .insert(cache_key, tokio::sync::Mutex::new(None));
                     #[cfg(feature = "legacy_readdir")]
                     inner
                         .legacy_readdir_cache
                         .write()
-                        .unwrap()
                         .insert(cache_key, tokio::sync::Mutex::new(None));
                     reply.opened(FileHandle(cache_key), FopenFlags::from_bits_retain(flags));
                 }
@@ -1125,47 +1124,47 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
         self.spawn(async move {
             #[cfg(feature = "legacy_readdir")]
             {
-                let Some(slot) = inner.legacy_readdir_cache.read().unwrap().get(fh.0) else {
+                let Some(slot) = inner.legacy_readdir_cache.read().get(fh.0) else {
                     reply.error(Errno::EINVAL);
                     return;
                 };
                 let mut slot = slot.lock().await;
-                if slot.is_none() {
-                    let real_fh = real_fh_or_reply_error!(
-                        inner.directory_cache.read().unwrap().real_fh(fh.0),
-                        reply
-                    );
-                    let producer = inner.target.legacy_readdir(req, path, real_fh);
-                    *slot = Some(ReaddirState::new(Box::pin(producer)));
-                }
+                let state = match &mut *slot {
+                    Some(state) => state,
+                    empty => {
+                        let real_fh = real_fh_or_reply_error!(
+                            inner.directory_cache.read().real_fh(fh.0),
+                            reply
+                        );
+                        let producer = inner.target.legacy_readdir(req, path, real_fh);
+                        empty.insert(ReaddirState::new(Box::pin(producer)))
+                    }
+                };
                 inner
-                    .fill_legacy_readdir(slot.as_mut().unwrap(), ino, parent_inode, offset, reply)
+                    .fill_legacy_readdir(state, ino, parent_inode, offset, reply)
                     .await;
             }
 
             #[cfg(not(feature = "legacy_readdir"))]
             {
-                let Some(slot) = inner.readdir_cache.read().unwrap().get(fh.0) else {
+                let Some(slot) = inner.readdir_cache.read().get(fh.0) else {
                     reply.error(Errno::EINVAL);
                     return;
                 };
                 let mut slot = slot.lock().await;
-                if slot.is_none() {
-                    let real_fh = real_fh_or_reply_error!(
-                        inner.directory_cache.read().unwrap().real_fh(fh.0),
-                        reply
-                    );
-                    let producer = inner.target.readdir(req, path, real_fh);
-                    *slot = Some(ReaddirState::new(Box::pin(producer)));
-                }
+                let state = match &mut *slot {
+                    Some(state) => state,
+                    empty => {
+                        let real_fh = real_fh_or_reply_error!(
+                            inner.directory_cache.read().real_fh(fh.0),
+                            reply
+                        );
+                        let producer = inner.target.readdir(req, path, real_fh);
+                        empty.insert(ReaddirState::new(Box::pin(producer)))
+                    }
+                };
                 inner
-                    .fill_readdir(
-                        slot.as_mut().unwrap(),
-                        ino,
-                        parent_inode,
-                        offset,
-                        ReaddirReply::Plain(reply),
-                    )
+                    .fill_readdir(state, ino, parent_inode, offset, ReaddirReply::Plain(reply))
                     .await;
             }
         });
@@ -1197,29 +1196,24 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
             }
         };
 
-        let Some(slot) = inner.readdir_cache.read().unwrap().get(fh.0) else {
+        let Some(slot) = inner.readdir_cache.read().get(fh.0) else {
             reply.error(Errno::EINVAL);
             return;
         };
 
         self.spawn(async move {
             let mut slot = slot.lock().await;
-            if slot.is_none() {
-                let real_fh = real_fh_or_reply_error!(
-                    inner.directory_cache.read().unwrap().real_fh(fh.0),
-                    reply
-                );
-                let producer = inner.target.readdir(req, path, real_fh);
-                *slot = Some(ReaddirState::new(Box::pin(producer)));
-            }
+            let state = match &mut *slot {
+                Some(state) => state,
+                empty => {
+                    let real_fh =
+                        real_fh_or_reply_error!(inner.directory_cache.read().real_fh(fh.0), reply);
+                    let producer = inner.target.readdir(req, path, real_fh);
+                    empty.insert(ReaddirState::new(Box::pin(producer)))
+                }
+            };
             inner
-                .fill_readdir(
-                    slot.as_mut().unwrap(),
-                    ino,
-                    parent_inode,
-                    offset,
-                    ReaddirReply::Plus(reply),
-                )
+                .fill_readdir(state, ino, parent_inode, offset, ReaddirReply::Plus(reply))
                 .await;
         });
     }
@@ -1234,8 +1228,7 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
     ) {
         let inner = Arc::clone(&self.inner);
         let path = get_resolved_path!(inner, ino, reply);
-        let real_fh =
-            real_fh_or_reply_error!(inner.directory_cache.read().unwrap().real_fh(fh.0), reply);
+        let real_fh = real_fh_or_reply_error!(inner.directory_cache.read().real_fh(fh.0), reply);
         let req = req.info();
         debug!("releasedir: {:?}", path);
 
@@ -1248,10 +1241,10 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
                 Ok(()) => reply.ok(),
                 Err(error) => reply.error(error.into()),
             }
-            inner.directory_cache.write().unwrap().delete(fh.0);
-            inner.readdir_cache.write().unwrap().delete(fh.0);
+            inner.directory_cache.write().delete(fh.0);
+            inner.readdir_cache.write().delete(fh.0);
             #[cfg(feature = "legacy_readdir")]
-            inner.legacy_readdir_cache.write().unwrap().delete(fh.0);
+            inner.legacy_readdir_cache.write().delete(fh.0);
         });
     }
 
@@ -1265,8 +1258,7 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
     ) {
         let inner = Arc::clone(&self.inner);
         let path = get_resolved_path!(inner, ino, reply);
-        let real_fh =
-            real_fh_or_reply_error!(inner.directory_cache.read().unwrap().real_fh(fh.0), reply);
+        let real_fh = real_fh_or_reply_error!(inner.directory_cache.read().real_fh(fh.0), reply);
         let req = req.info();
         debug!("fsyncdir: {:?} (datasync: {:?})", path, datasync);
 

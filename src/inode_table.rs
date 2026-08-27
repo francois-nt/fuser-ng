@@ -644,7 +644,7 @@ impl InodeToPath for InodeTable {
         self.access_write(|inner| {
             let entry = inner.table.get_mut((inode as usize).checked_sub(1)?)?;
             if matches!(entry.entry, Entry::Vacant) {
-                log::error!("lookup : vacant entry {:?} for inode {inode}", entry);
+                log::error!("lookup : vacant entry {:?} for inode {inode}", entry.entry);
                 return None;
             }
 

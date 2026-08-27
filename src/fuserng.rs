@@ -3,17 +3,17 @@
 // Copyright (c) 2016-2022 by William R. Fraser, 2026 by François NT
 //
 
-use std::ffi::{OsStr, OsString};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::SystemTime;
-
 #[cfg(not(feature = "legacy_readdir"))]
 use fuser::InitFlags;
 use fuser::{
     AccessFlags, Errno, FileHandle, FopenFlags, Generation, INodeNo, LockOwner, OpenFlags,
     RenameFlags, TimeOrNow, WriteFlags,
 };
+use parking_lot::{Mutex, RwLock};
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::SystemTime;
 
 use crate::FileType;
 use crate::directory_cache::*;
@@ -971,15 +971,13 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         debug!("opendir: {:?}", path);
         match self.target.opendir(req.info(), &path, flags.0 as u32) {
             Ok((fh, flags)) => {
-                let dcache_key = self.directory_cache.write().unwrap().new_entry(fh);
+                let dcache_key = self.directory_cache.write().new_entry(fh);
                 self.readdir_cache
                     .write()
-                    .unwrap()
                     .insert(dcache_key, Mutex::new(None));
                 #[cfg(feature = "legacy_readdir")]
                 self.legacy_readdir_cache
                     .write()
-                    .unwrap()
                     .insert(dcache_key, Mutex::new(None));
                 reply.opened(FileHandle(dcache_key), FopenFlags::from_bits_retain(flags));
             }
@@ -1013,21 +1011,20 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
 
         #[cfg(feature = "legacy_readdir")]
         {
-            let Some(slot) = self.legacy_readdir_cache.read().unwrap().get(fh.0) else {
+            let Some(slot) = self.legacy_readdir_cache.read().get(fh.0) else {
                 reply.error(Errno::EINVAL);
                 return;
             };
-            let mut slot = slot.lock().unwrap();
-            if slot.is_none() {
-                let real_fh = real_fh_or_reply_error!(
-                    self.directory_cache.read().unwrap().real_fh(fh.0),
-                    reply
-                );
-                let producer = self.target.legacy_readdir(req.info(), &path, real_fh);
-                *slot = Some(ReaddirState::new(Box::new(producer)));
-            }
-
-            let state = slot.as_mut().unwrap();
+            let mut slot = slot.lock();
+            let state = match &mut *slot {
+                Some(state) => state,
+                empty => {
+                    let real_fh =
+                        real_fh_or_reply_error!(self.directory_cache.read().real_fh(fh.0), reply);
+                    let producer = self.target.legacy_readdir(req.info(), &path, real_fh);
+                    empty.insert(ReaddirState::new(Box::new(producer)))
+                }
+            };
             let mut producer = state.producer.take();
             if self.fill_legacy_readdir(
                 state,
@@ -1043,21 +1040,20 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
 
         #[cfg(not(feature = "legacy_readdir"))]
         {
-            let Some(slot) = self.readdir_cache.read().unwrap().get(fh.0) else {
+            let Some(slot) = self.readdir_cache.read().get(fh.0) else {
                 reply.error(Errno::EINVAL);
                 return;
             };
-            let mut slot = slot.lock().unwrap();
-            if slot.is_none() {
-                let real_fh = real_fh_or_reply_error!(
-                    self.directory_cache.read().unwrap().real_fh(fh.0),
-                    reply
-                );
-                let producer = self.target.readdir(req.info(), &path, real_fh);
-                *slot = Some(ReaddirState::new(Box::new(producer)));
-            }
-
-            let state = slot.as_mut().unwrap();
+            let mut slot = slot.lock();
+            let state = match &mut *slot {
+                Some(state) => state,
+                empty => {
+                    let real_fh =
+                        real_fh_or_reply_error!(self.directory_cache.read().real_fh(fh.0), reply);
+                    let producer = self.target.readdir(req.info(), &path, real_fh);
+                    empty.insert(ReaddirState::new(Box::new(producer)))
+                }
+            };
             let mut producer = state.producer.take();
             if self.fill_readdir(
                 state,
@@ -1096,20 +1092,20 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
             }
         };
 
-        let Some(slot) = self.readdir_cache.read().unwrap().get(fh.0) else {
+        let Some(slot) = self.readdir_cache.read().get(fh.0) else {
             reply.error(Errno::EINVAL);
             return;
         };
-        let mut slot = slot.lock().unwrap();
-
-        if slot.is_none() {
-            let real_fh =
-                real_fh_or_reply_error!(self.directory_cache.read().unwrap().real_fh(fh.0), reply);
-            let producer = self.target.readdir(req.info(), &path, real_fh);
-            *slot = Some(ReaddirState::new(Box::new(producer)));
-        }
-
-        let state = slot.as_mut().unwrap();
+        let mut slot = slot.lock();
+        let state = match &mut *slot {
+            Some(state) => state,
+            empty => {
+                let real_fh =
+                    real_fh_or_reply_error!(self.directory_cache.read().real_fh(fh.0), reply);
+                let producer = self.target.readdir(req.info(), &path, real_fh);
+                empty.insert(ReaddirState::new(Box::new(producer)))
+            }
+        };
         let mut producer = state.producer.take();
         if self.fill_readdir(
             state,
@@ -1133,8 +1129,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
     ) {
         let path = get_resolved_path!(self, ino, reply);
         debug!("releasedir: {:?}", path);
-        let real_fh =
-            real_fh_or_reply_error!(self.directory_cache.read().unwrap().real_fh(fh.0), reply);
+        let real_fh = real_fh_or_reply_error!(self.directory_cache.read().real_fh(fh.0), reply);
         match self
             .target
             .releasedir(req.info(), &path, real_fh, flags.0 as u32)
@@ -1142,10 +1137,10 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
             Ok(()) => reply.ok(),
             Err(e) => reply.error(e.into()),
         }
-        self.directory_cache.write().unwrap().delete(fh.0);
-        self.readdir_cache.write().unwrap().delete(fh.0);
+        self.directory_cache.write().delete(fh.0);
+        self.readdir_cache.write().delete(fh.0);
         #[cfg(feature = "legacy_readdir")]
-        self.legacy_readdir_cache.write().unwrap().delete(fh.0);
+        self.legacy_readdir_cache.write().delete(fh.0);
     }
 
     fn fsyncdir(
@@ -1158,8 +1153,7 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
     ) {
         let path = get_resolved_path!(self, ino, reply);
         debug!("fsyncdir: {:?} (datasync: {:?})", path, datasync);
-        let real_fh =
-            real_fh_or_reply_error!(self.directory_cache.read().unwrap().real_fh(fh.0), reply);
+        let real_fh = real_fh_or_reply_error!(self.directory_cache.read().real_fh(fh.0), reply);
         match self.target.fsyncdir(req.info(), &path, real_fh, datasync) {
             Ok(()) => reply.ok(),
             Err(e) => reply.error(e.into()),
