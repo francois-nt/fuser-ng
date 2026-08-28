@@ -1,6 +1,6 @@
 // Public types exported by FuserNG.
 //
-// Copyright (c) 2016-2022 by William R. Fraser, 2026 by François NT
+// Copyright (c) 2026 by François NT, 2016-2022 by William R. Fraser
 //
 
 use crate::KernelConfig;
@@ -345,18 +345,23 @@ fn enosys_error<T>() -> std::io::Result<T> {
 /// ```
 #[allow(unused_variables)]
 pub trait Filesystem {
-    /// Called on mount, before any other function.
+    /// Called when the filesystem is mounted, before any other operation.
+    ///
+    /// * `req`: information about the FUSE request.
+    /// * `config`: kernel configuration that may be adjusted before mounting.
     fn init(&self, req: RequestInfo, config: &mut KernelConfig) -> ResultEmpty {
         Ok(())
     }
 
-    /// Called on filesystem unmount.
+    /// Called when the filesystem is unmounted.
     fn destroy(&self) {
         // Nothing.
     }
 
     /// Get the attributes of a filesystem entry.
     ///
+    /// * `req`: information about the FUSE request.
+    /// * `path`: path to the entry.
     /// * `fh`: a file handle if this is called on an open file.
     fn getattr(&self, req: RequestInfo, path: &EntryRef, fh: Option<u64>) -> ResultEntry {
         enosys_error()
@@ -367,6 +372,8 @@ pub trait Filesystem {
 
     /// Change the mode of a filesystem entry.
     ///
+    /// * `req`: information about the FUSE request.
+    /// * `path`: path to the entry.
     /// * `fh`: a file handle if this is called on an open file.
     /// * `mode`: the mode to change the file to.
     fn chmod(
@@ -381,9 +388,11 @@ pub trait Filesystem {
 
     /// Change the owner UID and/or group GID of a filesystem entry.
     ///
+    /// * `req`: information about the FUSE request.
+    /// * `path`: path to the entry.
     /// * `fh`: a file handle if this is called on an open file.
-    /// * `uid`: user ID to change the file's owner to. If `None`, leave the UID unchanged.
-    /// * `gid`: group ID to change the file's group to. If `None`, leave the GID unchanged.
+    /// * `uid`: new user ID for the file owner. If `None`, leave the UID unchanged.
+    /// * `gid`: new group ID for the file. If `None`, leave the GID unchanged.
     fn chown(
         &self,
         req: RequestInfo,
@@ -397,8 +406,10 @@ pub trait Filesystem {
 
     /// Set the length of a file.
     ///
+    /// * `req`: information about the FUSE request.
+    /// * `path`: path to the file.
     /// * `fh`: a file handle if this is called on an open file.
-    /// * `size`: size in bytes to set as the file's length.
+    /// * `size`: new file length in bytes.
     fn truncate(
         &self,
         req: RequestInfo,
@@ -409,11 +420,13 @@ pub trait Filesystem {
         enosys_error()
     }
 
-    /// Set timestamps of a filesystem entry.
+    /// Set the timestamps of a filesystem entry.
     ///
+    /// * `req`: information about the FUSE request.
+    /// * `path`: path to the entry.
     /// * `fh`: a file handle if this is called on an open file.
-    /// * `atime`: the time of last access.
-    /// * `mtime`: the time of last modification.
+    /// * `atime`: new access time, or `None` to leave it unchanged.
+    /// * `mtime`: new modification time, or `None` to leave it unchanged.
     fn utimens(
         &self,
         req: RequestInfo,
@@ -425,7 +438,15 @@ pub trait Filesystem {
         enosys_error()
     }
 
-    /// Set timestamps of a filesystem entry (with extra options only used on MacOS).
+    /// Set the timestamps of a filesystem entry using the additional macOS options.
+    ///
+    /// * `req`: information about the FUSE request.
+    /// * `path`: path to the entry.
+    /// * `fh`: a file handle if this is called on an open file.
+    /// * `crtime`: new creation time, or `None` to leave it unchanged.
+    /// * `chgtime`: new metadata change time, or `None` to leave it unchanged.
+    /// * `bkuptime`: new backup time, or `None` to leave it unchanged.
+    /// * `flags`: new macOS file flags, or `None` to leave them unchanged.
     #[allow(clippy::too_many_arguments)]
     fn utimens_macos(
         &self,
@@ -443,24 +464,27 @@ pub trait Filesystem {
     // END OF SETATTR FUNCTIONS
 
     /// Read a symbolic link.
+    ///
+    /// * `req`: information about the FUSE request.
+    /// * `path`: path to the symbolic link.
     fn readlink(&self, req: RequestInfo, path: &ResolvedPath) -> ResultData {
         enosys_error()
     }
 
     /// Create a special file.
     ///
-    /// * `parent`: path to the directory to make the entry under.
-    /// * `name`: name of the entry.
+    /// * `req`: information about the FUSE request.
+    /// * `entry`: entry name resolved relative to its parent directory.
     /// * `mode`: mode for the new entry.
-    /// * `rdev`: if mode has the bits `S_IFCHR` or `S_IFBLK` set, this is the major and minor numbers for the device file. Otherwise it should be ignored.
+    /// * `rdev`: device number when mode contains `S_IFCHR` or `S_IFBLK`; ignored otherwise.
     fn mknod(&self, req: RequestInfo, entry: &EntryName, mode: u32, rdev: u32) -> ResultEntry {
         enosys_error()
     }
 
     /// Create a directory.
     ///
-    /// * `parent`: path to the directory to make the directory under.
-    /// * `name`: name of the directory.
+    /// * `req`: information about the FUSE request.
+    /// * `entry`: directory name resolved relative to its parent directory.
     /// * `mode`: permissions for the new directory.
     fn mkdir(&self, req: RequestInfo, entry: &EntryName, mode: u32) -> ResultEntry {
         enosys_error()
@@ -468,24 +492,24 @@ pub trait Filesystem {
 
     /// Remove a file.
     ///
-    /// * `parent`: path to the directory containing the file to delete.
-    /// * `name`: name of the file to delete.
+    /// * `req`: information about the FUSE request.
+    /// * `entry`: file name resolved relative to its parent directory.
     fn unlink(&self, req: RequestInfo, entry: &EntryName) -> ResultEmpty {
         enosys_error()
     }
 
     /// Remove a directory.
     ///
-    /// * `parent`: path to the directory containing the directory to delete.
-    /// * `name`: name of the directory to delete.
+    /// * `req`: information about the FUSE request.
+    /// * `entry`: directory name resolved relative to its parent directory.
     fn rmdir(&self, req: RequestInfo, entry: &EntryName) -> ResultEmpty {
         enosys_error()
     }
 
     /// Create a symbolic link.
     ///
-    /// * `parent`: path to the directory to make the link in.
-    /// * `name`: name of the symbolic link.
+    /// * `req`: information about the FUSE request.
+    /// * `entry`: symbolic link name resolved relative to its parent directory.
     /// * `target`: path (may be relative or absolute) to the target of the link.
     fn symlink(&self, req: RequestInfo, entry: &EntryName, target: &Path) -> ResultEntry {
         enosys_error()
@@ -493,41 +517,42 @@ pub trait Filesystem {
 
     /// Rename a filesystem entry.
     ///
-    /// * `parent`: path to the directory containing the existing entry.
-    /// * `name`: name of the existing entry.
-    /// * `newparent`: path to the directory it should be renamed into (may be the same as `parent`).
-    /// * `newname`: name of the new entry.
+    /// * `req`: information about the FUSE request.
+    /// * `entry`: current entry name resolved relative to its parent directory.
+    /// * `new_entry`: new entry name resolved relative to its parent directory.
     fn rename(&self, req: RequestInfo, entry: &EntryName, new_entry: &EntryName) -> ResultEmpty {
         enosys_error()
     }
 
     /// Create a hard link.
     ///
+    /// * `req`: information about the FUSE request.
     /// * `path`: path to an existing file.
-    /// * `newparent`: path to the directory for the new link.
-    /// * `newname`: name for the new link.
+    /// * `new_entry`: new link name resolved relative to its parent directory.
     fn link(&self, req: RequestInfo, path: &ResolvedPath, new_entry: &EntryName) -> ResultEntry {
         enosys_error()
     }
 
     /// Open a file.
     ///
+    /// * `req`: information about the FUSE request.
     /// * `path`: path to the file.
-    /// * `flags`: one of `O_RDONLY`, `O_WRONLY`, or `O_RDWR`, plus maybe additional flags.
+    /// * `flags`: one of `O_RDONLY`, `O_WRONLY`, or `O_RDWR`, plus any additional flags.
     ///
     /// Return a tuple of (file handle, flags). The file handle will be passed to any subsequent
     /// calls that operate on the file, and can be any value you choose, though it should allow
-    /// your filesystem to identify the file opened even without any path info.
+    /// your filesystem to identify the open file even without path information.
     fn open(&self, req: RequestInfo, path: &ResolvedPath, flags: u32) -> ResultOpen {
         enosys_error()
     }
 
     /// Read from a file.
     ///
-    /// Note that it is not an error for this call to request to read past the end of the file, and
-    /// you should only return data up to the end of the file (i.e. the number of bytes returned
-    /// will be fewer than requested; possibly even zero). Do not extend the file in this case.
+    /// Reading past the end of the file is not an error. Return only the available data up to the
+    /// end of the file, which may be fewer bytes than requested or even zero bytes. Do not extend
+    /// the file in this case.
     ///
+    /// * `req`: information about the FUSE request.
     /// * `path`: path to the file.
     /// * `fh`: file handle returned from the `open` call.
     /// * `offset`: offset into the file to start reading.
@@ -550,11 +575,12 @@ pub trait Filesystem {
 
     /// Write to a file.
     ///
+    /// * `req`: information about the FUSE request.
     /// * `path`: path to the file.
     /// * `fh`: file handle returned from the `open` call.
     /// * `offset`: offset into the file to start writing.
-    /// * `data`: the data to write
-    /// * `flags`:
+    /// * `data`: data to write.
+    /// * `flags`: FUSE write flags.
     ///
     /// Return the number of bytes written.
     fn write(
@@ -576,6 +602,7 @@ pub trait Filesystem {
     /// filesystem would like to return an error to the `close` call. Note that most programs
     /// ignore the return value of `close`, though.
     ///
+    /// * `req`: information about the FUSE request.
     /// * `path`: path to the file.
     /// * `fh`: file handle returned from the `open` call.
     /// * `lock_owner`: if the filesystem supports locking (`setlk`, `getlk`), remove all locks
@@ -595,6 +622,7 @@ pub trait Filesystem {
     /// There will be one of these for each `open` call. After `release`, no more calls will be
     /// made with the given file handle.
     ///
+    /// * `req`: information about the FUSE request.
     /// * `path`: path to the file.
     /// * `fh`: file handle returned from the `open` call.
     /// * `flags`: the flags passed when the file was opened.
@@ -613,33 +641,36 @@ pub trait Filesystem {
         enosys_error()
     }
 
-    /// Write out any pending changes of a file.
+    /// Write out any pending changes to a file.
     ///
     /// When this returns, data should be written to persistent storage.
     ///
+    /// * `req`: information about the FUSE request.
     /// * `path`: path to the file.
     /// * `fh`: file handle returned from the `open` call.
-    /// * `datasync`: if `false`, also write metadata, otherwise just write file data.
+    /// * `datasync`: if `false`, also write metadata; otherwise, write only file data.
     fn fsync(&self, req: RequestInfo, path: &ResolvedPath, fh: u64, datasync: bool) -> ResultEmpty {
         enosys_error()
     }
 
     /// Open a directory.
     ///
-    /// Analogous to the `opend` call.
+    /// Analogous to the `opendir` call.
     ///
+    /// * `req`: information about the FUSE request.
     /// * `path`: path to the directory.
     /// * `flags`: file access flags. Will contain `O_DIRECTORY` at least.
     ///
     /// Return a tuple of (file handle, flags). The file handle will be passed to any subsequent
     /// calls that operate on the directory, and can be any value you choose, though it should
-    /// allow your filesystem to identify the directory opened even without any path info.
+    /// allow your filesystem to identify the open directory even without path information.
     fn opendir(&self, req: RequestInfo, path: &ResolvedPath, flags: u32) -> ResultOpen {
         enosys_error()
     }
 
     /// Gets directory entries together with their attributes.
     ///
+    /// * `req`: information about the FUSE request.
     /// * `path`: path to the directory.
     /// * `fh`: file handle returned from the `opendir` call.
     ///
@@ -655,6 +686,10 @@ pub trait Filesystem {
     }
 
     /// Gets directory entries without attributes for the legacy FUSE readdir operation.
+    ///
+    /// * `req`: information about the FUSE request.
+    /// * `path`: path to the directory.
+    /// * `fh`: file handle returned from the `opendir` call.
     ///
     /// Results are produced in batches and retained by FuserNG until releasedir, allowing
     /// offsets previously returned to FUSE to be revisited.
@@ -672,6 +707,7 @@ pub trait Filesystem {
     ///
     /// This will be called exactly once for each `opendir` call.
     ///
+    /// * `req`: information about the FUSE request.
     /// * `path`: path to the directory.
     /// * `fh`: file handle returned from the `opendir` call.
     /// * `flags`: the file access flags passed to the `opendir` call.
@@ -688,6 +724,11 @@ pub trait Filesystem {
     /// Write out any pending changes to a directory.
     ///
     /// Analogous to the `fsync` call.
+    ///
+    /// * `req`: information about the FUSE request.
+    /// * `path`: path to the directory.
+    /// * `fh`: file handle returned from the `opendir` call.
+    /// * `datasync`: if `false`, also write metadata; otherwise, write only directory data.
     fn fsyncdir(
         &self,
         req: RequestInfo,
@@ -700,15 +741,17 @@ pub trait Filesystem {
 
     /// Get filesystem statistics.
     ///
-    /// * `path`: path to some folder in the filesystem.
+    /// * `req`: information about the FUSE request.
+    /// * `path`: path to a directory in the filesystem.
     ///
     /// See the `Statfs` struct for more details.
     fn statfs(&self, req: RequestInfo, path: &ResolvedPath) -> ResultStatfs {
         enosys_error()
     }
 
-    /// Set a file extended attribute.
+    /// Set an extended attribute on a file.
     ///
+    /// * `req`: information about the FUSE request.
     /// * `path`: path to the file.
     /// * `name`: attribute name.
     /// * `value`: the data to set the value to.
@@ -726,9 +769,10 @@ pub trait Filesystem {
         enosys_error()
     }
 
-    /// Get a file extended attribute.
+    /// Get an extended attribute from a file.
     ///
-    /// * `path`: path to the file
+    /// * `req`: information about the FUSE request.
+    /// * `path`: path to the file.
     /// * `name`: attribute name.
     /// * `size`: the maximum number of bytes to read.
     ///
@@ -746,6 +790,7 @@ pub trait Filesystem {
 
     /// List extended attributes for a file.
     ///
+    /// * `req`: information about the FUSE request.
     /// * `path`: path to the file.
     /// * `size`: maximum number of bytes to return.
     ///
@@ -757,8 +802,9 @@ pub trait Filesystem {
         enosys_error()
     }
 
-    /// Remove an extended attribute for a file.
+    /// Remove an extended attribute from a file.
     ///
+    /// * `req`: information about the FUSE request.
     /// * `path`: path to the file.
     /// * `name`: name of the attribute to remove.
     fn removexattr(&self, req: RequestInfo, path: &ResolvedPath, name: &OsStr) -> ResultEmpty {
@@ -767,24 +813,25 @@ pub trait Filesystem {
 
     /// Check for access to a file.
     ///
+    /// * `req`: information about the FUSE request.
     /// * `path`: path to the file.
     /// * `mask`: mode bits to check for access to.
     ///
     /// Return `Ok(())` if all requested permissions are allowed, otherwise return `Err(EACCES)`
-    /// or other error code as appropriate (e.g. `ENOENT` if the file doesn't exist).
+    /// or another appropriate error code (e.g. `ENOENT` if the file doesn't exist).
     fn access(&self, req: RequestInfo, path: &ResolvedPath, mask: u32) -> ResultEmpty {
         enosys_error()
     }
 
     /// Create and open a new file.
     ///
-    /// * `parent`: path to the directory to create the file in.
-    /// * `name`: name of the file to be created.
+    /// * `req`: information about the FUSE request.
+    /// * `path`: path to the new file.
     /// * `mode`: the mode to set on the new file.
-    /// * `flags`: flags like would be passed to `open`.
+    /// * `flags`: flags that would be passed to `open`.
     ///
-    /// Return a `CreatedEntry` (which contains the new file's attributes as well as a file handle
-    /// -- see documentation on `open` for more info on that).
+    /// Return a `CreatedEntry` containing the new file's attributes and a file handle. See the
+    /// documentation for `open` for more information about file handles.
     fn create(&self, req: RequestInfo, path: &ResolvedPath, mode: u32, flags: u32) -> ResultCreate {
         enosys_error()
     }
@@ -797,7 +844,8 @@ pub trait Filesystem {
 
     /// macOS only: Rename the volume.
     ///
-    /// * `name`: new name for the volume
+    /// * `req`: information about the FUSE request.
+    /// * `name`: new name for the volume.
     #[cfg(target_os = "macos")]
     fn setvolname(&self, req: RequestInfo, name: &OsStr) -> ResultEmpty {
         enosys_error()
@@ -807,9 +855,10 @@ pub trait Filesystem {
 
     /// macOS only: Query extended times (bkuptime and crtime).
     ///
+    /// * `req`: information about the FUSE request.
     /// * `path`: path to the file to get the times for.
     ///
-    /// Return an `XTimes` struct with the times, or other error code as appropriate.
+    /// Return an `XTimes` struct containing the times, or an appropriate error.
     #[cfg(target_os = "macos")]
     fn getxtimes(&self, req: RequestInfo, path: &ResolvedPath) -> ResultXTimes {
         Err(libc::ENOSYS)

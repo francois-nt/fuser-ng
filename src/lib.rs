@@ -18,7 +18,7 @@
 // example, a read-only filesystem can skip implementing the `write` call and many others.
 
 //
-// Copyright (c) 2016-2022 by William R. Fraser, 2026 by François NT
+// Copyright (c) 2026 by François NT, 2016-2022 by William R. Fraser
 //
 
 #[macro_use]

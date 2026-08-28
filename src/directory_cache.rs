@@ -1,6 +1,6 @@
 // DirectoryCache :: a cache for directory entries to simplify readdir calls.
 //
-// Copyright (c) 2017-2019 by William R. Fraser
+// Copyright (c) 2026 by François NT, 2017-2019 by William R. Fraser
 //
 
 use std::collections::HashMap;

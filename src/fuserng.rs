@@ -1,6 +1,6 @@
 // FuserNG :: A wrapper around FUSE that presents paths instead of inodes.
 //
-// Copyright (c) 2016-2022 by William R. Fraser, 2026 by François NT
+// Copyright (c) 2026 by François NT, 2016-2022 by William R. Fraser
 //
 
 #[cfg(not(feature = "legacy_readdir"))]

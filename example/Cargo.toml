@@ -1,7 +1,7 @@
 [package]
 name = "passthrufs"
 version = "0.1.0"
-authors = ["William R. Fraser <wfraser@codewise.org>", "François NT <francois@iobuffer.me>"]
+authors = ["François NT <francois@iobuffer.me>", "William R. Fraser <wfraser@codewise.org>"]
 edition = "2018"
 workspace = ".."
 
