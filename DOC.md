@@ -133,6 +133,10 @@ The asynchronous trait receives owned path and data arguments and returns
 `Send` futures. `init` and `destroy` remain synchronous because they are
 lifecycle callbacks.
 
+Like `Filesystem`, `AsyncFilesystem` provides default `ENOSYS`
+implementations for unsupported operations, so implementations only need to
+override the operations they support.
+
 `AsyncFuserNG` only stores the Tokio `Handle`; it does not own or shut down the
 runtime. The caller must keep the runtime alive while the filesystem is
 mounted and decides how outstanding tasks are handled during shutdown.

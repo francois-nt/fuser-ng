@@ -1,3 +1,9 @@
+v0.9.1: 2026-08-28
+  * Add default `ENOSYS` implementations for `AsyncFilesystem` methods, so asynchronous filesystems only need to override the operations they support.
+  * Handle invalid inode and directory handles without panicking in the synchronous and asynchronous adapters.
+  * Prevent `unwrap`, `expect`, and `panic!` from being used in non-test library code.
+  * Expand the `Filesystem` and `AsyncFilesystem` rustdoc with complete argument descriptions.
+
 v0.9.0: 2026-08-25
   * Breaking change: `Filesystem::readdir` now returns directory entries incrementally as an iterator of result batches instead of collecting the complete directory in a single result.
   * Breaking change: `AsyncFilesystem::readdir` now returns a stream of result batches instead of a future containing the complete directory.

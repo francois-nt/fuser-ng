@@ -1,6 +1,6 @@
 [package]
 name = "fuser-ng"
-version = "0.9.0"
+version = "0.9.1"
 authors = ["François NT <francois@iobuffer.me>", "William R. Fraser <wfraser@codewise.org>"]
 repository = "https://github.com/francois-nt/fuser-ng"
 description = "A higher-level path-oriented FUSE filesystem library with optional async support."
