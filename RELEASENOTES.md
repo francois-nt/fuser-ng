@@ -1,3 +1,10 @@
+v0.9.2: 2026-11-06
+  * Update parking_lot to 0.13 and raise the minimum supported Rust version from 1.85 to 1.95.
+  * Reject unsupported rename flags with EINVAL in the synchronous and asynchronous adapters, with regression coverage for NOREPLACE and EXCHANGE.
+  * Skip inode path resolution in forget when debug logging is disabled.
+  * Clarify that write receives file open flags.
+  * Extend CI to cover the minimum supported Rust version and all combinations of the async and legacy_readdir features.
+
 v0.9.1: 2026-08-28
   * Add default `ENOSYS` implementations for `AsyncFilesystem` methods, so asynchronous filesystems only need to override the operations they support.
   * Handle invalid inode and directory handles without panicking in the synchronous and asynchronous adapters.
