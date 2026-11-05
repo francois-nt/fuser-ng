@@ -18,8 +18,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rust_toolchain: [stable, nightly]
-        configuration: [default, async]
+        rust_toolchain: ["1.95.0", stable, nightly]
+        configuration: [default, async, legacy_readdir, async_legacy_readdir]
         include:
           - rust_toolchain: stable
             deny_warnings: --deny warnings
@@ -29,6 +29,10 @@ jobs:
             cargo_features: --no-default-features
           - configuration: async
             cargo_features: --no-default-features --features fuser-ng/async,passthrufs/async
+          - configuration: legacy_readdir
+            cargo_features: --no-default-features --features fuser-ng/legacy_readdir,passthrufs/legacy_readdir
+          - configuration: async_legacy_readdir
+            cargo_features: --no-default-features --features fuser-ng/async,passthrufs/async,fuser-ng/legacy_readdir,passthrufs/legacy_readdir
     steps:
       - name: Checkout sources
         uses: actions/checkout@v6

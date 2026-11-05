@@ -513,9 +513,6 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         let path = resolve_from_parent!(self, parent, name, reply);
         debug!("lookup: {:?}", path);
         let path = EntryRef::Lookup(path);
-        //let parent_path = get_folder_path!(self, parent, reply);
-        //debug!("lookup: {:?}, {:?}", parent_path, name);
-        //let path = Arc::new((*parent_path).clone().join(name));
         match self.target.getattr(req.info(), &path, None) {
             Ok((ttl, attr)) => {
                 let value = if attr.kind == FileType::Directory {
@@ -546,16 +543,18 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
                 return;
             }
         };
-        let path = self.get_path(ino).unwrap_or_else(|| {
-            EntryName::new(
-                Arc::new(PathBuf::from(OsStr::new(""))).into(),
-                OsString::from("[unknown]").into(),
-            )
-        });
-        debug!(
-            "forget: inode {} ({:?}) now at {} lookups",
-            ino, path, lookups
-        );
+        if log::log_enabled!(log::Level::Debug) {
+            let path = self.get_path(ino).unwrap_or_else(|| {
+                EntryName::new(
+                    Arc::new(PathBuf::from(OsStr::new(""))).into(),
+                    OsString::from("[unknown]").into(),
+                )
+            });
+            debug!(
+                "forget: inode {} ({:?}) now at {} lookups",
+                ino, path, lookups
+            );
+        }
     }
 
     fn getattr(
@@ -794,9 +793,14 @@ impl<T: Filesystem + Sync + Send + 'static> fuser::Filesystem for FuserNG<T> {
         name: &OsStr,
         newparent: INodeNo,
         newname: &OsStr,
-        _flags: RenameFlags, // TODO
+        flags: RenameFlags,
         reply: fuser::ReplyEmpty,
     ) {
+        if !flags.is_empty() {
+            reply.error(Errno::EINVAL);
+            return;
+        }
+
         let entry = resolve_from_parent!(self, parent, name, reply);
         let new_entry = resolve_from_parent!(self, newparent, newname, reply);
         debug!("rename: {:?} -> {:?}", entry, new_entry);

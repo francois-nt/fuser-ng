@@ -566,17 +566,18 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
                 return;
             }
         };
-
-        let path = self.inner.get_path(ino).unwrap_or_else(|| {
-            EntryName::new(
-                Arc::new(PathBuf::from(OsStr::new(""))).into(),
-                OsString::from("[unknown]").into(),
-            )
-        });
-        debug!(
-            "forget: inode {} ({:?}) now at {} lookups",
-            ino, path, lookups
-        );
+        if log::log_enabled!(log::Level::Debug) {
+            let path = self.inner.get_path(ino).unwrap_or_else(|| {
+                EntryName::new(
+                    Arc::new(PathBuf::from(OsStr::new(""))).into(),
+                    OsString::from("[unknown]").into(),
+                )
+            });
+            debug!(
+                "forget: inode {} ({:?}) now at {} lookups",
+                ino, path, lookups
+            );
+        }
     }
 
     fn getattr(
@@ -855,9 +856,14 @@ impl<T: AsyncFilesystem + Sync + Send + 'static> fuser::Filesystem for AsyncFuse
         name: &OsStr,
         newparent: INodeNo,
         newname: &OsStr,
-        _flags: RenameFlags,
+        flags: RenameFlags,
         reply: fuser::ReplyEmpty,
     ) {
+        if !flags.is_empty() {
+            reply.error(Errno::EINVAL);
+            return;
+        }
+
         let inner = Arc::clone(&self.inner);
         let entry = resolve_from_parent!(inner, parent, name, reply);
         let new_entry = resolve_from_parent!(inner, newparent, newname, reply);

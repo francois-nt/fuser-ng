@@ -580,7 +580,7 @@ pub trait Filesystem {
     /// * `fh`: file handle returned from the `open` call.
     /// * `offset`: offset into the file to start writing.
     /// * `data`: data to write.
-    /// * `flags`: FUSE write flags.
+    /// * flags: file open flags.
     ///
     /// Return the number of bytes written.
     fn write(

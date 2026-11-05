@@ -435,6 +435,34 @@ fn exercise_passthrough(binary: &str, features: Option<&str>) -> io::Result<()> 
     let rename_destination = work.join("rename-destination.txt");
     fs::write(&rename_source, b"source")?;
     fs::write(&rename_destination, b"destination")?;
+    let source = path_cstring(&rename_source)?;
+    let no_replace_destination = work.join("rename-noreplace.txt");
+    for (flags, target) in [
+        (libc::RENAME_NOREPLACE, &no_replace_destination),
+        (libc::RENAME_EXCHANGE, &rename_destination),
+    ] {
+        let destination = path_cstring(target)?;
+        let error = cvt_unit(unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                source.as_ptr(),
+                libc::AT_FDCWD,
+                destination.as_ptr(),
+                flags,
+            )
+        })
+        .unwrap_err();
+        assert_eq!(Some(libc::EINVAL), error.raw_os_error());
+        assert!(!no_replace_destination.exists());
+        assert!(!backing.path().join("work/rename-noreplace.txt").exists());
+        assert_file_content(&rename_source, b"source")?;
+        assert_file_content(&rename_destination, b"destination")?;
+        assert_file_content(&backing.path().join("work/rename-source.txt"), b"source")?;
+        assert_file_content(
+            &backing.path().join("work/rename-destination.txt"),
+            b"destination",
+        )?;
+    }
     fs::rename(&rename_source, &rename_destination)?;
     assert_file_content(&rename_destination, b"source")?;
     assert_error_kind(
