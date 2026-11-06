@@ -1,7 +1,7 @@
 # fuser-ng
 
-`fuser-ng` is a higher-level, path-oriented FUSE filesystem library for Rust,
-built on top of [`fuser`](https://github.com/cberner/fuser) 0.18.
+`fuser-ng` is a higher-level FUSE filesystem library for Rust with a hybrid
+path/inode API, built on top of [`fuser`](https://github.com/cberner/fuser) 0.18.
 
 It started as a fork of `fuse-mt`. The 0.7 series moved the crate to `fuser`
 0.17, uses fuser's native threading instead of an internal thread pool, and
@@ -14,12 +14,13 @@ asynchronous filesystems.
 ## Overview
 
 `fuser` exposes low-level FUSE kernel operations. `fuser-ng` wraps those
-operations with an API that is closer to the FUSE C API and simpler to
-implement for path-based filesystems.
+operations with an API that combines path resolution with access to inode
+identities. It handles low-level replies and simplifies filesystem implementation.
 
 The crate:
 
-* translates FUSE inodes into paths;
+* resolves FUSE inodes to paths and exposes inode numbers to callbacks that
+  receive a resolved entry;
 * lets `Filesystem` methods return `std::io::Result` values instead of using
   fuser reply objects directly;
 * provides default `ENOSYS` implementations for operations you do not support;
@@ -31,18 +32,31 @@ The crate:
 * adds broader unit and integration test coverage than the original `fuse-mt`
   codebase, including inode-table rename cases and passthrough FUSE operations.
 
-## Path API
+## Hybrid path/inode API
 
-Filesystem methods receive path-oriented types instead of raw inode numbers:
+Filesystem methods receive entry types that carry paths and, when available,
+the inode assigned by the adapter. Both synchronous and asynchronous callbacks
+use these types:
 
-* `EntryName` is a child name resolved relative to a parent directory. It is
-  used for operations such as `mkdir`, `mknod`, `symlink`, `unlink`, and
-  `rename`.
-* `ResolvedPath` is an entry path with its inode attached. It is used when
-  `FuserNG` already has an inode for the entry, including operations such as
-  `open`, `read`, `write`, and `create`.
+* `EntryName` is a child name resolved relative to a parent directory, with no
+  inode attached. It is used for operations such as `mkdir`, `mknod`, `symlink`,
+  `unlink`, and `rename`.
+* `ResolvedPath` combines an entry path with its inode, accessible through
+  `ino()`. It is used for operations such as `open`, `read`, and `write`.
+  `create` also receives this type after the adapter has selected an inode
+  for the entry.
 * `EntryRef` is used by `getattr`, which may run either while resolving a
-  parent/name lookup or after an inode has already been resolved.
+  parent/name lookup or after an inode has already been resolved. Match
+  `EntryRef::Resolved(path)` to access `path.ino()`; `EntryRef::Lookup` carries
+  an `EntryName` without an inode.
+
+Unlike the path-only callback arguments in
+[`fuse-mt`](https://docs.rs/fuse_mt/0.6.4/fuse_mt/trait.FilesystemMT.html),
+`ResolvedPath` exposes the adapter's inode number alongside the path.
+
+These inode numbers are assigned by FuserNG for the mount. They are independent
+of any underlying filesystem's inode numbers and can be reused after the
+corresponding inode-table entry is freed.
 
 These path wrapper types implement `Clone`. Cloning them is cheap because the
 stored path components are shared internally.
