@@ -91,12 +91,20 @@ fuser_ng::mount(
 
 `Filesystem::readdir` returns directory entries in batches. Each
 `DirectoryEntry` contains the entry name, its attributes, and their cache
-duration. Implementations can choose an appropriate batch size and produce
-entries incrementally instead of collecting the complete directory first.
+duration. Batching reduces the wait for initial results: applications can
+receive entries while the rest of the directory is still being enumerated.
 
 The adapter consumes batches as reply space becomes available and handles
-directory offsets internally. `AsyncFilesystem::readdir` provides the same
-model through an asynchronous `Stream`.
+directory offsets internally. It fills FUSE reply buffers progressively,
+without first collecting the complete directory. `AsyncFilesystem::readdir`
+provides the same model through an asynchronous `Stream`.
+
+FUSE can request an earlier offset again, for example when an application uses
+`seekdir` or `rewinddir`. For each open directory handle, FuserNG deliberately
+retains the entries already consumed until `releasedir`. This history allows
+offsets to be replayed without restarting enumeration or repeating backend
+requests. Retaining it is a performance choice: batching improves result
+delivery latency, while memory usage grows with the retained entries.
 
 ### Migrating from 0.8
 

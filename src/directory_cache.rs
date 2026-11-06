@@ -17,6 +17,8 @@ use fuser::Errno;
 ///
 /// FuserNG consumes the target filesystem's directory stream as reply space becomes available and
 /// retains the entries it has seen so FUSE can revisit earlier offsets.
+/// Batching allows replies before enumeration completes; retaining the history avoids restarting
+/// enumeration or repeating backend requests when an earlier offset is requested again.
 ///
 /// To do this, we need to give FUSE our own file handle (the cache entry key) instead of the one
 /// the filesystem returned from opendir(), so we have to store that file handle as well.
@@ -87,6 +89,10 @@ impl DirectoryCacheEntry {
 }
 
 /// State retained while serving directory requests for one directory handle.
+///
+/// Consumed entries are deliberately retained until releasedir for fast replay of earlier offsets.
+/// Batching reduces result delivery latency; this history trades memory for avoiding repeated
+/// enumeration and backend requests.
 pub(crate) struct ReaddirState<P, E> {
     pub(crate) entries: Vec<E>,
     pub(crate) producer: Option<P>,

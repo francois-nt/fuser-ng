@@ -87,6 +87,20 @@ fuser_ng::mount(
 )?;
 ```
 
+## Directory reads
+
+Directory entries are produced in batches so applications can receive initial
+results while the rest of the directory is still being enumerated. The adapter
+fills FUSE reply buffers progressively and handles directory offsets internally.
+
+FUSE can request an earlier offset again, for example through `seekdir` or
+`rewinddir`. FuserNG deliberately retains consumed entries for each open
+directory handle until `releasedir`, allowing fast replay without restarting
+enumeration or repeating backend requests. This history is part of the design:
+batching improves result delivery latency, while memory usage grows with the
+retained entries. Synchronous and asynchronous directory reads follow the same
+model.
+
 ## Passthrough example
 
 The workspace includes a passthrough filesystem that forwards operations to

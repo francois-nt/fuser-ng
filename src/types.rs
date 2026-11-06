@@ -674,8 +674,10 @@ pub trait Filesystem {
     /// * `path`: path to the directory.
     /// * `fh`: file handle returned from the `opendir` call.
     ///
-    /// Results are produced in batches and retained by FuserNG until releasedir, allowing
-    /// offsets previously returned to FUSE to be revisited.
+    /// Batching allows initial results to be returned before directory enumeration completes.
+    /// FuserNG deliberately retains consumed entries until releasedir so earlier offsets can be
+    /// replayed without restarting enumeration or repeating backend requests. This history
+    /// trades memory for fast replay; batching is intended to reduce result delivery latency.
     fn readdir(
         &self,
         req: RequestInfo,
@@ -691,8 +693,10 @@ pub trait Filesystem {
     /// * `path`: path to the directory.
     /// * `fh`: file handle returned from the `opendir` call.
     ///
-    /// Results are produced in batches and retained by FuserNG until releasedir, allowing
-    /// offsets previously returned to FUSE to be revisited.
+    /// Batching allows initial results to be returned before directory enumeration completes.
+    /// FuserNG deliberately retains consumed entries until releasedir so earlier offsets can be
+    /// replayed without restarting enumeration or repeating backend requests. This history
+    /// trades memory for fast replay; batching is intended to reduce result delivery latency.
     #[cfg(feature = "legacy_readdir")]
     fn legacy_readdir(
         &self,
