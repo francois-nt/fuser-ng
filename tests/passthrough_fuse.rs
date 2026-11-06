@@ -86,26 +86,62 @@ impl Drop for PassthroughProcess {
     }
 }
 
+/// Builds the requested example and returns the executable path reported by Cargo.
+fn build_passthrough(binary: &str, features: Option<&str>) -> io::Result<PathBuf> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let mut command = Command::new(cargo);
+    command.args([
+        "build",
+        "--quiet",
+        "--message-format=json-render-diagnostics",
+        "-p",
+        "passthrufs",
+        "--bin",
+        binary,
+    ]);
+    if let Some(features) = features {
+        command.args(["--features", features]);
+    }
+    let output = command
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .stderr(Stdio::inherit())
+        .output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "building {binary} failed: {}",
+            output.status
+        )));
+    }
+    for message in
+        serde_json::Deserializer::from_slice(&output.stdout).into_iter::<serde_json::Value>()
+    {
+        let message = message?;
+        if message["reason"] == "compiler-artifact"
+            && message["target"]["name"] == binary
+            && let Some(path) = message["executable"].as_str()
+        {
+            return Ok(PathBuf::from(path));
+        }
+    }
+    Err(io::Error::other(format!(
+        "Cargo did not report an executable for {binary}"
+    )))
+}
+
 fn start_passthrough(
     backing: &Path,
     mountpoint: &Path,
     binary: &str,
     features: Option<&str>,
 ) -> io::Result<PassthroughProcess> {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let mut command = Command::new(cargo);
-    command.args(["run", "--quiet", "-p", "passthrufs", "--bin", binary]);
-    if let Some(features) = features {
-        command.args(["--features", features]);
-    }
-    let child = command
-        .arg("--")
+    let executable = build_passthrough(binary, features)?;
+    let child = Command::new(executable)
         .arg(backing)
         .arg(mountpoint)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()?;
 
     let mut process = PassthroughProcess {

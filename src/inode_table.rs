@@ -45,7 +45,7 @@ mod child_key {
     use std::sync::Arc;
 
     /// Borrowed child key used for zero-allocation lookups.
-    #[derive(Clone, Copy, Debug)]
+    #[derive(Debug)]
     pub(super) struct ChildKeyRef<'a> {
         parent: Inode,
         name: &'a OsStr,
@@ -716,6 +716,9 @@ impl InodeToPath for InodeTable {
             }
 
             inner.table[idx].linked = true;
+            if oldparent != newparent {
+                inner.maybe_free_inode(oldparent as usize - 1);
+            }
             Some(())
         })
     }
@@ -1064,6 +1067,43 @@ mod tests {
         let (new_left_file, _) = table.add_or_get_leaf(left, name("file")).unwrap();
         assert_ne!(file, new_left_file);
         assert_path(&table, new_left_file, "/left/file");
+    }
+
+    #[test]
+    fn moving_last_child_frees_forgotten_parent_chain() {
+        for is_dir in [false, true] {
+            let table = InodeTable::new();
+            let (ancestor, _) = table.add_dir(1, name("ancestor")).unwrap();
+            let (left, generation) = table.add_dir(ancestor, name("left")).unwrap();
+            let (right, _) = table.add_dir(1, name("right")).unwrap();
+            let (child, _) = if is_dir {
+                table.add_dir(left, name("child"))
+            } else {
+                table.add_leaf(left, name("child"))
+            }
+            .unwrap();
+            let descendant = is_dir.then(|| table.add_leaf(child, name("file")).unwrap().0);
+
+            assert_eq!(Some(0), table.forget(ancestor, 1));
+            assert_eq!(Some(0), table.forget(left, 1));
+            assert_path(&table, left, "/ancestor/left");
+            assert_eq!(
+                Some(()),
+                table.rename(left, name("child"), right, name("moved"))
+            );
+
+            assert_no_path(&table, left);
+            assert_no_path(&table, ancestor);
+            assert_path(&table, child, "/right/moved");
+            assert_eq!(Some(right), table.get_parent_inode(child));
+            if let Some(descendant) = descendant {
+                assert_folder_path(&table, child, "/right/moved");
+                assert_path(&table, descendant, "/right/moved/file");
+            }
+            let (reused, next_generation) = table.add_leaf(1, name("reused")).unwrap();
+            assert_eq!(left, reused);
+            assert_eq!(generation + 1, next_generation);
+        }
     }
 
     #[test]

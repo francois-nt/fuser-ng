@@ -29,6 +29,9 @@ log = "0.4"
 parking_lot = "0.13"
 tokio = { version = "1", features = ["rt-multi-thread", "sync"], optional = true }
 
+[dev-dependencies]
+serde_json = "1"
+
 [features]
 default = []
 async = ["dep:futures-core", "dep:tokio"]
