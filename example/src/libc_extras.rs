@@ -10,7 +10,7 @@ pub mod libc {
     pub use ::libc::*;
 
     // stuff missing from the libc crate.
-    extern "system" {
+    unsafe extern "system" {
         // Specified by POSIX.1-2008; not sure why this is missing.
         pub fn fchown(fd: c_int, uid: uid_t, gid: gid_t) -> c_int;
 

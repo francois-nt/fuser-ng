@@ -2,7 +2,7 @@
 name = "passthrufs"
 version = "0.1.0"
 authors = ["François NT <francois@iobuffer.me>", "William R. Fraser <wfraser@codewise.org>"]
-edition = "2018"
+edition = "2024"
 workspace = ".."
 
 [dependencies]

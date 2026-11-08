@@ -168,7 +168,7 @@ pub fn lsetxattr(
         flags: libc::c_int,
         _position: u32,
     ) -> libc::c_int {
-        libc::lsetxattr(path, name, value, size, flags)
+        unsafe { libc::lsetxattr(path, name, value, size, flags) }
     }
 
     if cfg!(not(target_os = "macos")) && position != 0 {

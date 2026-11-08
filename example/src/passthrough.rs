@@ -278,7 +278,9 @@ impl Filesystem for PassthroughFS {
                     libc::DT_CHR => FileType::CharDevice,
                     libc::DT_FIFO => FileType::NamedPipe,
                     libc::DT_SOCK => {
-                        warn!("FUSE doesn't support Socket file type; translating to NamedPipe instead.");
+                        warn!(
+                            "FUSE doesn't support Socket file type; translating to NamedPipe instead."
+                        );
                         FileType::NamedPipe
                     }
                     _ => {
@@ -958,7 +960,7 @@ struct UnmanagedFile {
 impl UnmanagedFile {
     unsafe fn new(fd: u64) -> UnmanagedFile {
         UnmanagedFile {
-            inner: Some(File::from_raw_fd(fd as i32)),
+            inner: Some(unsafe { File::from_raw_fd(fd as i32) }),
         }
     }
     fn sync_all(&self) -> io::Result<()> {

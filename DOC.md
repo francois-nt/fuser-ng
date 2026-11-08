@@ -1,15 +1,18 @@
 # fuser-ng
 
-`fuser-ng` is a higher-level FUSE filesystem library for Rust with a hybrid
-path/inode API, built on top of [`fuser`](https://github.com/cberner/fuser) 0.18.
+`fuser-ng` simplifies building FUSE filesystems in Rust by combining
+convenient path-based operations with explicit access to inode identities.
+Built on top of [`fuser`](https://github.com/cberner/fuser), it supports both
+synchronous and asynchronous implementations.
 
-It started as a fork of `fuse-mt`. The 0.7 series moved the crate to `fuser`
-0.17, uses fuser's native threading instead of an internal thread pool, and
-adds a new inode table that keeps descendant paths correct when a parent
-directory is renamed. Version 0.8 refines the public path API for inode-aware
-`getattr` and `create` callbacks and adds an optional asynchronous filesystem
-interface. Version 0.9 adds streaming directory reads for synchronous and
-asynchronous filesystems.
+`fuser-ng` was created as a fork of `fuse-mt` to overcome its limitations.
+It provides broader unit and integration test coverage, uses `fuser`'s native
+multithreaded request handling, and combines a hybrid path/inode API with
+batched directory reads for progressive result delivery. Asynchronous
+filesystem support is opt-in through the `async` feature.
+
+The project now prioritizes stabilizing its public interfaces. Breaking
+changes are expected to be exceptional, though they remain possible.
 
 ## Overview
 
