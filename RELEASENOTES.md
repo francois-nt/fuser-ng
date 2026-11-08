@@ -1,3 +1,12 @@
+v0.9.3: 2026-11-08
+  * Free forgotten parent inodes after their last child is moved to another directory, with regression coverage for cascading cleanup and inode reuse.
+  * Prevent borrowed inode-table keys from escaping their owner by removing their Clone and Copy implementations.
+  * Build passthrough test binaries before starting the mount timeout and preserve compiler and runtime error diagnostics.
+  * Document the hybrid path/inode API, optional async support, project goals, and the priority given to stabilizing public interfaces.
+  * Explain that directory batching improves result delivery latency and deliberately retains history for fast offset replay without repeating backend requests.
+  * Migrate the passthrough examples to Rust 2024 and make unsafe operations explicit.
+  * Update the copyright notices in the MIT and Apache license files.
+
 v0.9.2: 2026-11-06
   * Update parking_lot to 0.13 and raise the minimum supported Rust version from 1.85 to 1.95.
   * Reject unsupported rename flags with EINVAL in the synchronous and asynchronous adapters, with regression coverage for NOREPLACE and EXCHANGE.
